@@ -1,0 +1,520 @@
+"""
+認証フロー全体のE2Eテスト
+End-to-end authentication flow tests
+"""
+import pytest
+import asyncio
+from unittest.mock import patch, Mock, AsyncMock
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+class TestE2EAuthFlow:
+    """認証フロー全体のE2Eテストクラス / End-to-end authentication flow test class"""
+    
+    @pytest.fixture
+    def client(self):
+        """テストクライアント / Test client"""
+        return TestClient(app)
+    
+    @pytest.fixture
+    def e2e_user_data(self):
+        """E2Eテスト用ユーザーデータ / User data for E2E tests"""
+        return {
+            "id": 1,
+            "cognito_user_id": "e2e-test-user-id",
+            "email": "e2e@example.com",
+            "username": "e2euser",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00"
+        }
+    
+    @pytest.fixture
+    def e2e_cognito_mock(self):
+        """E2Eテスト用Cognitoモック / Cognito mock for E2E tests"""
+        with patch('app.auth.cognito.cognito_verifier') as mock_verifier:
+            # モックCognitoクライアント / Mock Cognito client
+            mock_client = Mock()
+            
+            # 認証成功レスポンス / Successful authentication response
+            mock_client.initiate_auth.return_value = {
+                'AuthenticationResult': {
+                    'AccessToken': 'e2e-access-token-12345',
+                    'IdToken': 'e2e-id-token-12345',
+                    'RefreshToken': 'e2e-refresh-token-12345',
+                    'TokenType': 'Bearer',
+                    'ExpiresIn': 3600
+                }
+            }
+            
+            # グローバルサインアウト成功 / Successful global sign out
+            mock_client.global_sign_out.return_value = {
+                'ResponseMetadata': {'HTTPStatusCode': 200}
+            }
+            
+            # ユーザープール情報 / User pool info
+            mock_client.describe_user_pool.return_value = {
+                'UserPool': {
+                    'Id': 'e2e-test-pool-id',
+                    'Name': 'e2e-test-pool'
+                }
+            }
+            
+            # トークン検証 / Token verification
+            mock_verifier.verify_token.return_value = {
+                'sub': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'email': 'e2e@example.com',
+                'token_use': 'access',
+                'client_id': 'e2e-test-client-id',
+                'scope': 'openid email profile',
+                'exp': 1704067200,
+                'iat': 1704063600
+            }
+            
+            # トークンリフレッシュ / Token refresh
+            mock_verifier.refresh_token.return_value = {
+                'access_token': 'e2e-new-access-token',
+                'token_type': 'Bearer',
+                'expires_in': 3600
+            }
+            
+            # ヘルスチェック / Health check
+            mock_verifier.check_cognito_health = AsyncMock(return_value={
+                'status': 'healthy',
+                'message': 'Cognito service is accessible'
+            })
+            
+            mock_verifier.cognito_client = mock_client
+            
+            yield mock_verifier
+    
+    @pytest.fixture
+    def e2e_database_mock(self, e2e_user_data):
+        """E2Eテスト用データベースモック / Database mock for E2E tests"""
+        with patch('app.database.get_db') as mock_get_db, \
+             patch('app.database.execute_query') as mock_execute_query, \
+             patch('app.database.execute_update') as mock_execute_update, \
+             patch('app.database.execute_insert') as mock_execute_insert, \
+             patch('app.database.check_database_health') as mock_db_health:
+            
+            mock_connection = Mock()
+            mock_get_db.return_value = mock_connection
+            
+            # データベースヘルスチェック / Database health check
+            mock_db_health.return_value = {
+                "status": "healthy",
+                "message": "Database connection successful"
+            }
+            
+            # ユーザー検索結果 / User search results
+            mock_execute_query.return_value = [e2e_user_data]
+            
+            yield {
+                'get_db': mock_get_db,
+                'execute_query': mock_execute_query,
+                'execute_update': mock_execute_update,
+                'execute_insert': mock_execute_insert,
+                'db_health': mock_db_health,
+                'connection': mock_connection
+            }
+    
+    def test_complete_authentication_e2e_flow(self, client, e2e_cognito_mock, 
+                                            e2e_database_mock, e2e_user_data):
+        """完全な認証E2Eフローテスト / Complete authentication E2E flow test"""
+        
+        # ステップ1: システムヘルスチェック / Step 1: System health check
+        health_response = client.get("/api/v1/health/")
+        assert health_response.status_code == 200
+        
+        health_data = health_response.json()
+        assert health_data["status"] == "healthy"
+        assert "version" in health_data
+        
+        # ステップ2: 詳細ヘルスチェック / Step 2: Detailed health check
+        detailed_health_response = client.get("/api/v1/health/detailed")
+        assert detailed_health_response.status_code == 200
+        
+        detailed_health_data = detailed_health_response.json()
+        assert detailed_health_data["status"] == "healthy"
+        assert "checks" in detailed_health_data
+        assert detailed_health_data["checks"]["database"]["status"] == "healthy"
+        assert detailed_health_data["checks"]["cognito"]["status"] == "healthy"
+        
+        # ステップ3: 未認証でのAPIアクセス試行（失敗するはず）
+        # Step 3: Attempt API access without authentication (should fail)
+        unauthorized_response = client.get("/api/v1/users/")
+        assert unauthorized_response.status_code == 401
+        
+        # ステップ4: ログイン実行 / Step 4: Execute login
+        login_credentials = {
+            "email": "e2e@example.com",
+            "password": "e2epassword123"
+        }
+        
+        login_response = client.post("/api/v1/auth/login", json=login_credentials)
+        assert login_response.status_code == 200
+        
+        login_data = login_response.json()
+        assert login_data["status"] == "success"
+        assert "access_token" in login_data["data"]
+        assert "user" in login_data["data"]
+        assert login_data["data"]["user"]["email"] == login_credentials["email"]
+        
+        access_token = login_data["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # ステップ5: トークン検証 / Step 5: Token verification
+        verify_response = client.post("/api/v1/auth/verify", headers=headers)
+        assert verify_response.status_code == 200
+        
+        verify_data = verify_response.json()
+        assert verify_data["status"] == "success"
+        assert verify_data["data"]["valid"] is True
+        assert "claims" in verify_data["data"]
+        
+        # ステップ6: 現在のユーザー情報取得 / Step 6: Get current user info
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'email': 'e2e@example.com',
+                'scope': ['openid', 'email', 'profile']
+            }
+            
+            me_response = client.get("/api/v1/auth/me", headers=headers)
+            assert me_response.status_code == 200
+            
+            me_data = me_response.json()
+            assert me_data["status"] == "success"
+            assert "user" in me_data["data"]
+            assert me_data["data"]["user"]["username"] == "e2euser"
+        
+        # ステップ7: 認証が必要なAPIエンドポイントへのアクセス
+        # Step 7: Access authenticated API endpoints
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user, \
+             patch('app.repositories.user.UserRepository.get_multi') as mock_get_multi, \
+             patch('app.repositories.user.UserRepository.count') as mock_count:
+            
+            mock_get_user.return_value = {
+                'cognito_user_id': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'scope': ['admin']  # 管理者権限 / Admin privileges
+            }
+            mock_get_multi.return_value = [e2e_user_data]
+            mock_count.return_value = 1
+            
+            # ユーザー一覧取得 / Get users list
+            users_response = client.get("/api/v1/users/", headers=headers)
+            assert users_response.status_code == 200
+            
+            users_data = users_response.json()
+            assert users_data["status"] == "success"
+            assert len(users_data["data"]) == 1
+            assert users_data["data"][0]["username"] == "e2euser"
+        
+        # ステップ8: 特定ユーザー情報取得 / Step 8: Get specific user info
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user, \
+             patch('app.repositories.user.UserRepository.get') as mock_get:
+            
+            mock_get_user.return_value = {
+                'cognito_user_id': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'scope': ['admin']
+            }
+            mock_get.return_value = e2e_user_data
+            
+            user_response = client.get("/api/v1/users/1", headers=headers)
+            assert user_response.status_code == 200
+            
+            user_data = user_response.json()
+            assert user_data["status"] == "success"
+            assert user_data["data"]["id"] == 1
+            assert user_data["data"]["username"] == "e2euser"
+        
+        # ステップ9: トークンリフレッシュ / Step 9: Token refresh
+        refresh_request = {
+            "refresh_token": "e2e-refresh-token-12345"
+        }
+        
+        refresh_response = client.post("/api/v1/auth/refresh", json=refresh_request)
+        assert refresh_response.status_code == 200
+        
+        refresh_data = refresh_response.json()
+        assert refresh_data["status"] == "success"
+        assert "access_token" in refresh_data["data"]
+        
+        new_access_token = refresh_data["data"]["access_token"]
+        new_headers = {"Authorization": f"Bearer {new_access_token}"}
+        
+        # ステップ10: 新しいトークンでAPIアクセス / Step 10: API access with new token
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'email': 'e2e@example.com'
+            }
+            
+            new_me_response = client.get("/api/v1/auth/me", headers=new_headers)
+            assert new_me_response.status_code == 200
+        
+        # ステップ11: ログアウト実行 / Step 11: Execute logout
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'email': 'e2e@example.com'
+            }
+            
+            logout_response = client.post("/api/v1/auth/logout", headers=headers)
+            assert logout_response.status_code == 200
+            
+            logout_data = logout_response.json()
+            assert logout_data["status"] == "success"
+            assert "logout_time" in logout_data["data"]
+        
+        # ステップ12: ログアウト後のAPIアクセス試行（失敗するはず）
+        # Step 12: Attempt API access after logout (should fail)
+        post_logout_response = client.get("/api/v1/users/", headers=headers)
+        assert post_logout_response.status_code == 401
+    
+    def test_authentication_error_scenarios_e2e(self, client, e2e_cognito_mock):
+        """認証エラーシナリオのE2Eテスト / Authentication error scenarios E2E test"""
+        
+        # シナリオ1: 無効な認証情報でのログイン / Scenario 1: Login with invalid credentials
+        e2e_cognito_mock.cognito_client.initiate_auth.side_effect = \
+            e2e_cognito_mock.cognito_client.exceptions.NotAuthorizedException()
+        
+        invalid_credentials = {
+            "email": "invalid@example.com",
+            "password": "wrongpassword"
+        }
+        
+        invalid_login_response = client.post("/api/v1/auth/login", json=invalid_credentials)
+        assert invalid_login_response.status_code == 401
+        
+        invalid_login_data = invalid_login_response.json()
+        assert invalid_login_data["status"] == "error"
+        assert invalid_login_data["error_code"] == "INVALID_CREDENTIALS"
+        
+        # シナリオ2: 無効なトークンでのAPIアクセス / Scenario 2: API access with invalid token
+        invalid_headers = {"Authorization": "Bearer invalid-token"}
+        
+        with patch('app.auth.cognito.cognito_verifier.verify_token') as mock_verify:
+            from app.exceptions import AuthenticationError
+            mock_verify.side_effect = AuthenticationError("Invalid token")
+            
+            invalid_token_response = client.get("/api/v1/auth/me", headers=invalid_headers)
+            assert invalid_token_response.status_code == 401
+        
+        # シナリオ3: 期限切れトークンでのアクセス / Scenario 3: Access with expired token
+        expired_headers = {"Authorization": "Bearer expired-token"}
+        
+        with patch('app.auth.cognito.cognito_verifier.verify_token') as mock_verify:
+            from app.exceptions import AuthenticationError
+            mock_verify.side_effect = AuthenticationError("Token has expired")
+            
+            expired_token_response = client.get("/api/v1/auth/me", headers=expired_headers)
+            assert expired_token_response.status_code == 401
+    
+    def test_user_management_e2e_flow(self, client, e2e_cognito_mock, 
+                                    e2e_database_mock, e2e_user_data):
+        """ユーザー管理E2Eフローテスト / User management E2E flow test"""
+        
+        # 事前準備: ログイン / Preparation: Login
+        login_response = client.post("/api/v1/auth/login", json={
+            "email": "e2e@example.com",
+            "password": "e2epassword123"
+        })
+        assert login_response.status_code == 200
+        
+        access_token = login_response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # 管理者ユーザーとして認証 / Authenticate as admin user
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'e2e-test-user-id',
+                'username': 'e2euser',
+                'scope': ['admin', 'user:read', 'user:write']
+            }
+            
+            # ステップ1: ユーザー一覧取得 / Step 1: Get users list
+            with patch('app.repositories.user.UserRepository.get_multi') as mock_get_multi, \
+                 patch('app.repositories.user.UserRepository.count') as mock_count:
+                
+                mock_get_multi.return_value = [e2e_user_data]
+                mock_count.return_value = 1
+                
+                users_response = client.get("/api/v1/users/", headers=headers)
+                assert users_response.status_code == 200
+                
+                users_data = users_response.json()
+                assert users_data["status"] == "success"
+                assert len(users_data["data"]) == 1
+            
+            # ステップ2: 新しいユーザー作成 / Step 2: Create new user
+            new_user_data = {
+                "email": "newuser@example.com",
+                "username": "newuser",
+                "password": "newpassword123"
+            }
+            
+            created_user = e2e_user_data.copy()
+            created_user.update({
+                "id": 2,
+                "email": "newuser@example.com",
+                "username": "newuser"
+            })
+            
+            with patch('app.repositories.user.UserRepository.create_user') as mock_create:
+                mock_create.return_value = created_user
+                
+                create_response = client.post("/api/v1/users/", json=new_user_data, headers=headers)
+                assert create_response.status_code == 201
+                
+                create_data = create_response.json()
+                assert create_data["status"] == "success"
+                assert create_data["data"]["email"] == new_user_data["email"]
+            
+            # ステップ3: ユーザー情報更新 / Step 3: Update user info
+            update_data = {"username": "updateduser"}
+            updated_user = e2e_user_data.copy()
+            updated_user["username"] = "updateduser"
+            
+            with patch('app.repositories.user.UserRepository.get') as mock_get, \
+                 patch('app.repositories.user.UserRepository.update_user') as mock_update:
+                
+                mock_get.return_value = e2e_user_data
+                mock_update.return_value = updated_user
+                
+                update_response = client.put("/api/v1/users/1", json=update_data, headers=headers)
+                assert update_response.status_code == 200
+                
+                update_response_data = update_response.json()
+                assert update_response_data["status"] == "success"
+                assert update_response_data["data"]["username"] == "updateduser"
+            
+            # ステップ4: ユーザー削除 / Step 4: Delete user
+            with patch('app.repositories.user.UserRepository.get') as mock_get, \
+                 patch('app.repositories.user.UserRepository.delete') as mock_delete:
+                
+                mock_get.return_value = e2e_user_data
+                mock_delete.return_value = True
+                
+                delete_response = client.delete("/api/v1/users/1", headers=headers)
+                assert delete_response.status_code == 200
+                
+                delete_data = delete_response.json()
+                assert delete_data["status"] == "success"
+                assert delete_data["data"]["deleted_user_id"] == 1
+    
+    def test_system_monitoring_e2e_flow(self, client, e2e_cognito_mock, e2e_database_mock):
+        """システム監視E2Eフローテスト / System monitoring E2E flow test"""
+        
+        # ステップ1: 基本ヘルスチェック / Step 1: Basic health check
+        health_response = client.get("/api/v1/health/")
+        assert health_response.status_code == 200
+        
+        # ステップ2: システムメトリクス取得 / Step 2: Get system metrics
+        with patch('app.api.routes.health.collect_system_metrics') as mock_metrics:
+            mock_metrics.return_value = {
+                "process": {"memory_rss": 1024000, "cpu_percent": 5.0},
+                "system": {"memory_percent": 60.0, "cpu_percent": 10.0}
+            }
+            
+            metrics_response = client.get("/api/v1/health/metrics")
+            assert metrics_response.status_code == 200
+            
+            metrics_data = metrics_response.json()
+            assert metrics_data["status"] == "success"
+            assert "metrics" in metrics_data
+        
+        # ステップ3: データベースヘルスチェック / Step 3: Database health check
+        db_health_response = client.get("/api/v1/health/database")
+        assert db_health_response.status_code == 200
+        
+        db_health_data = db_health_response.json()
+        assert "database" in db_health_data
+        assert db_health_data["database"]["status"] == "healthy"
+        
+        # ステップ4: Cognitoヘルスチェック / Step 4: Cognito health check
+        cognito_health_response = client.get("/api/v1/health/cognito")
+        assert cognito_health_response.status_code == 200
+        
+        cognito_health_data = cognito_health_response.json()
+        assert "cognito" in cognito_health_data
+        assert cognito_health_data["cognito"]["status"] == "healthy"
+        
+        # ステップ5: 準備完了プローブ / Step 5: Readiness probe
+        readiness_response = client.get("/api/v1/health/readiness")
+        assert readiness_response.status_code == 200
+        
+        readiness_data = readiness_response.json()
+        assert readiness_data["status"] == "ready"
+        
+        # ステップ6: 生存プローブ / Step 6: Liveness probe
+        liveness_response = client.get("/api/v1/health/liveness")
+        assert liveness_response.status_code == 200
+        
+        liveness_data = liveness_response.json()
+        assert liveness_data["status"] == "alive"
+        assert "uptime_seconds" in liveness_data
+    
+    def test_error_recovery_e2e_flow(self, client, e2e_cognito_mock, e2e_database_mock):
+        """エラー回復E2Eフローテスト / Error recovery E2E flow test"""
+        
+        # シナリオ1: データベース一時的障害からの回復
+        # Scenario 1: Recovery from temporary database failure
+        
+        # 最初にデータベースエラーを発生させる / First cause database error
+        e2e_database_mock['db_health'].return_value = {
+            "status": "unhealthy",
+            "message": "Database connection failed"
+        }
+        
+        unhealthy_response = client.get("/api/v1/health/detailed")
+        assert unhealthy_response.status_code == 200
+        
+        unhealthy_data = unhealthy_response.json()
+        assert unhealthy_data["status"] == "degraded"
+        
+        # データベースが回復 / Database recovers
+        e2e_database_mock['db_health'].return_value = {
+            "status": "healthy",
+            "message": "Database connection successful"
+        }
+        
+        recovered_response = client.get("/api/v1/health/detailed")
+        assert recovered_response.status_code == 200
+        
+        recovered_data = recovered_response.json()
+        assert recovered_data["status"] == "healthy"
+        
+        # シナリオ2: Cognito一時的障害からの回復
+        # Scenario 2: Recovery from temporary Cognito failure
+        
+        # Cognitoエラーを発生させる / Cause Cognito error
+        e2e_cognito_mock.check_cognito_health = AsyncMock(return_value={
+            'status': 'unhealthy',
+            'message': 'Cognito service error'
+        })
+        
+        cognito_unhealthy_response = client.get("/api/v1/health/detailed")
+        assert cognito_unhealthy_response.status_code == 200
+        
+        cognito_unhealthy_data = cognito_unhealthy_response.json()
+        assert cognito_unhealthy_data["status"] == "degraded"
+        
+        # Cognitoが回復 / Cognito recovers
+        e2e_cognito_mock.check_cognito_health = AsyncMock(return_value={
+            'status': 'healthy',
+            'message': 'Cognito service is accessible'
+        })
+        
+        cognito_recovered_response = client.get("/api/v1/health/detailed")
+        assert cognito_recovered_response.status_code == 200
+        
+        cognito_recovered_data = cognito_recovered_response.json()
+        assert cognito_recovered_data["status"] == "healthy"

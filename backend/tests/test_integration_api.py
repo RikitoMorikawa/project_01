@@ -1,0 +1,437 @@
+"""
+API統合テスト
+API integration tests
+"""
+import pytest
+import asyncio
+from unittest.mock import patch, Mock
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+class TestAPIIntegration:
+    """API統合テストクラス / API integration test class"""
+    
+    @pytest.fixture
+    def client(self):
+        """テストクライアント / Test client"""
+        return TestClient(app)
+    
+    @pytest.fixture
+    def mock_database_integration(self):
+        """統合テスト用データベースモック / Database mock for integration tests"""
+        with patch('app.database.get_db') as mock_get_db, \
+             patch('app.database.execute_query') as mock_execute_query, \
+             patch('app.database.execute_update') as mock_execute_update, \
+             patch('app.database.execute_insert') as mock_execute_insert, \
+             patch('app.database.check_database_health') as mock_db_health:
+            
+            mock_connection = Mock()
+            mock_get_db.return_value = mock_connection
+            mock_db_health.return_value = {"status": "healthy", "message": "Database is healthy"}
+            
+            yield {
+                'get_db': mock_get_db,
+                'execute_query': mock_execute_query,
+                'execute_update': mock_execute_update,
+                'execute_insert': mock_execute_insert,
+                'db_health': mock_db_health,
+                'connection': mock_connection
+            }
+    
+    @pytest.fixture
+    def mock_cognito_integration(self):
+        """統合テスト用Cognitoモック / Cognito mock for integration tests"""
+        with patch('app.auth.cognito.cognito_verifier') as mock_verifier:
+            # モックCognitoクライアント / Mock Cognito client
+            mock_client = Mock()
+            mock_client.initiate_auth.return_value = {
+                'AuthenticationResult': {
+                    'AccessToken': 'integration-access-token',
+                    'IdToken': 'integration-id-token',
+                    'RefreshToken': 'integration-refresh-token',
+                    'TokenType': 'Bearer',
+                    'ExpiresIn': 3600
+                }
+            }
+            mock_client.global_sign_out.return_value = {'ResponseMetadata': {'HTTPStatusCode': 200}}
+            mock_client.describe_user_pool.return_value = {
+                'UserPool': {'Id': 'test-pool', 'Name': 'test-pool'}
+            }
+            
+            # モック検証器の設定 / Mock verifier setup
+            mock_verifier.cognito_client = mock_client
+            mock_verifier.verify_token.return_value = {
+                'sub': 'integration-user-id',
+                'username': 'integrationuser',
+                'email': 'integration@example.com',
+                'token_use': 'access',
+                'scope': 'openid email profile'
+            }
+            mock_verifier.refresh_token.return_value = {
+                'access_token': 'new-integration-token',
+                'token_type': 'Bearer',
+                'expires_in': 3600
+            }
+            mock_verifier.check_cognito_health = asyncio.coroutine(lambda: {
+                'status': 'healthy',
+                'message': 'Cognito service is accessible'
+            })
+            
+            yield mock_verifier
+    
+    @pytest.fixture
+    def integration_user_data(self):
+        """統合テスト用ユーザーデータ / User data for integration tests"""
+        return {
+            "id": 1,
+            "cognito_user_id": "integration-user-id",
+            "email": "integration@example.com",
+            "username": "integrationuser",
+            "created_at": "2024-01-01T00:00:00",
+            "updated_at": "2024-01-01T00:00:00"
+        }
+    
+    def test_health_check_integration(self, client, mock_database_integration, mock_cognito_integration):
+        """ヘルスチェック統合テスト / Health check integration test"""
+        # 基本ヘルスチェック / Basic health check
+        response = client.get("/api/v1/health/")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert "version" in data
+        assert "environment" in data
+    
+    def test_detailed_health_check_integration(self, client, mock_database_integration, mock_cognito_integration):
+        """詳細ヘルスチェック統合テスト / Detailed health check integration test"""
+        response = client.get("/api/v1/health/detailed")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert "checks" in data
+        assert "database" in data["checks"]
+        assert "cognito" in data["checks"]
+        assert data["checks"]["database"]["status"] == "healthy"
+        assert data["checks"]["cognito"]["status"] == "healthy"
+    
+    def test_auth_login_integration(self, client, mock_cognito_integration):
+        """認証ログイン統合テスト / Authentication login integration test"""
+        login_data = {
+            "email": "integration@example.com",
+            "password": "integrationpass123"
+        }
+        
+        response = client.post("/api/v1/auth/login", json=login_data)
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert data["status"] == "success"
+        assert "access_token" in data["data"]
+        assert "user" in data["data"]
+        assert data["data"]["user"]["email"] == login_data["email"]
+    
+    def test_auth_logout_integration(self, client, mock_cognito_integration):
+        """認証ログアウト統合テスト / Authentication logout integration test"""
+        headers = {"Authorization": "Bearer integration-access-token"}
+        
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'integration-user-id',
+                'username': 'integrationuser',
+                'email': 'integration@example.com'
+            }
+            
+            response = client.post("/api/v1/auth/logout", headers=headers)
+            assert response.status_code == 200
+            
+            data = response.json()
+            assert data["status"] == "success"
+            assert "logout_time" in data["data"]
+    
+    def test_users_crud_integration(self, client, mock_database_integration, integration_user_data):
+        """ユーザーCRUD統合テスト / Users CRUD integration test"""
+        # 認証ユーザーをモック / Mock authenticated user
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'integration-user-id',
+                'username': 'integrationuser',
+                'scope': ['admin']  # 管理者権限 / Admin privileges
+            }
+            
+            headers = {"Authorization": "Bearer integration-access-token"}
+            
+            # 1. ユーザー一覧取得 / Get users list
+            mock_database_integration['execute_query'].return_value = [integration_user_data]
+            
+            with patch('app.repositories.user.UserRepository.get_multi') as mock_get_multi, \
+                 patch('app.repositories.user.UserRepository.count') as mock_count:
+                
+                mock_get_multi.return_value = [integration_user_data]
+                mock_count.return_value = 1
+                
+                response = client.get("/api/v1/users/", headers=headers)
+                assert response.status_code == 200
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert len(data["data"]) == 1
+                assert data["total"] == 1
+            
+            # 2. 特定ユーザー取得 / Get specific user
+            with patch('app.repositories.user.UserRepository.get') as mock_get:
+                mock_get.return_value = integration_user_data
+                
+                response = client.get("/api/v1/users/1", headers=headers)
+                assert response.status_code == 200
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert data["data"]["id"] == 1
+            
+            # 3. ユーザー作成 / Create user
+            new_user_data = {
+                "email": "newuser@example.com",
+                "username": "newuser",
+                "password": "newpass123"
+            }
+            
+            created_user = integration_user_data.copy()
+            created_user.update({
+                "id": 2,
+                "email": "newuser@example.com",
+                "username": "newuser"
+            })
+            
+            with patch('app.repositories.user.UserRepository.create_user') as mock_create:
+                mock_create.return_value = created_user
+                
+                response = client.post("/api/v1/users/", json=new_user_data, headers=headers)
+                assert response.status_code == 201
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert data["data"]["email"] == new_user_data["email"]
+            
+            # 4. ユーザー更新 / Update user
+            update_data = {"username": "updateduser"}
+            updated_user = integration_user_data.copy()
+            updated_user["username"] = "updateduser"
+            
+            with patch('app.repositories.user.UserRepository.get') as mock_get, \
+                 patch('app.repositories.user.UserRepository.update_user') as mock_update:
+                
+                mock_get.return_value = integration_user_data
+                mock_update.return_value = updated_user
+                
+                response = client.put("/api/v1/users/1", json=update_data, headers=headers)
+                assert response.status_code == 200
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert data["data"]["username"] == "updateduser"
+            
+            # 5. ユーザー削除 / Delete user
+            with patch('app.repositories.user.UserRepository.get') as mock_get, \
+                 patch('app.repositories.user.UserRepository.delete') as mock_delete:
+                
+                mock_get.return_value = integration_user_data
+                mock_delete.return_value = True
+                
+                response = client.delete("/api/v1/users/1", headers=headers)
+                assert response.status_code == 200
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert data["data"]["deleted_user_id"] == 1
+    
+    def test_user_profile_integration(self, client, mock_database_integration, integration_user_data):
+        """ユーザープロファイル統合テスト / User profile integration test"""
+        profile_data = {
+            "id": 1,
+            "user_id": 1,
+            "first_name": "統合",
+            "last_name": "テスト",
+            "bio": "統合テスト用プロファイル"
+        }
+        
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'integration-user-id',
+                'username': 'integrationuser'
+            }
+            
+            headers = {"Authorization": "Bearer integration-access-token"}
+            
+            # プロファイル取得 / Get profile
+            with patch('app.repositories.user.UserProfileRepository.get_by_user_id') as mock_get_profile:
+                mock_get_profile.return_value = profile_data
+                
+                response = client.get("/api/v1/users/1/profile", headers=headers)
+                assert response.status_code == 200
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert data["data"]["first_name"] == "統合"
+            
+            # プロファイル更新 / Update profile
+            update_data = {"bio": "更新された統合テスト用プロファイル"}
+            updated_profile = profile_data.copy()
+            updated_profile["bio"] = update_data["bio"]
+            
+            with patch('app.repositories.user.UserRepository.get') as mock_get_user_repo, \
+                 patch('app.repositories.user.UserProfileRepository.update_profile') as mock_update_profile:
+                
+                mock_get_user_repo.return_value = integration_user_data
+                mock_update_profile.return_value = updated_profile
+                
+                response = client.put("/api/v1/users/1/profile", json=update_data, headers=headers)
+                assert response.status_code == 200
+                
+                data = response.json()
+                assert data["status"] == "success"
+                assert data["data"]["bio"] == update_data["bio"]
+    
+    def test_error_handling_integration(self, client, mock_database_integration):
+        """エラーハンドリング統合テスト / Error handling integration test"""
+        # 1. 認証エラー / Authentication error
+        response = client.get("/api/v1/users/")
+        assert response.status_code == 401
+        
+        # 2. 存在しないエンドポイント / Non-existent endpoint
+        response = client.get("/api/v1/nonexistent")
+        assert response.status_code == 404
+        
+        # 3. 無効なJSONデータ / Invalid JSON data
+        headers = {"Authorization": "Bearer invalid-token"}
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.side_effect = Exception("Invalid token")
+            
+            response = client.post("/api/v1/users/", json={"invalid": "data"}, headers=headers)
+            assert response.status_code == 401
+    
+    def test_cors_integration(self, client):
+        """CORS統合テスト / CORS integration test"""
+        # OPTIONSリクエストでCORSヘッダーを確認 / Check CORS headers with OPTIONS request
+        response = client.options("/api/v1/health/")
+        assert response.status_code == 200
+        
+        # CORSヘッダーの存在確認 / Verify CORS headers exist
+        # 注意：TestClientはCORSミドルウェアを完全にシミュレートしない場合がある
+        # Note: TestClient may not fully simulate CORS middleware
+    
+    def test_middleware_integration(self, client):
+        """ミドルウェア統合テスト / Middleware integration test"""
+        response = client.get("/api/v1/health/")
+        assert response.status_code == 200
+        
+        # セキュリティヘッダーの確認 / Check security headers
+        # 注意：実際のヘッダーはミドルウェア実装に依存 / Actual headers depend on middleware implementation
+        assert response.headers.get("content-type") == "application/json"
+    
+    def test_request_id_integration(self, client):
+        """リクエストID統合テスト / Request ID integration test"""
+        with patch('app.dependencies.get_request_id') as mock_request_id:
+            mock_request_id.return_value = "integration-test-request-id"
+            
+            response = client.get("/api/v1/health/")
+            assert response.status_code == 200
+            
+            data = response.json()
+            assert data["request_id"] == "integration-test-request-id"
+    
+    def test_database_connection_integration(self, client, mock_database_integration):
+        """データベース接続統合テスト / Database connection integration test"""
+        # データベースヘルスチェック / Database health check
+        response = client.get("/api/v1/health/database")
+        assert response.status_code == 200
+        
+        data = response.json()
+        assert "database" in data
+        assert data["database"]["status"] == "healthy"
+    
+    def test_cognito_integration_flow(self, client, mock_cognito_integration):
+        """Cognito統合フローテスト / Cognito integration flow test"""
+        # 1. ログイン / Login
+        login_response = client.post("/api/v1/auth/login", json={
+            "email": "integration@example.com",
+            "password": "integrationpass123"
+        })
+        assert login_response.status_code == 200
+        
+        login_data = login_response.json()
+        access_token = login_data["data"]["access_token"]
+        
+        # 2. 認証が必要なエンドポイントにアクセス / Access authenticated endpoint
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user:
+            mock_get_user.return_value = {
+                'cognito_user_id': 'integration-user-id',
+                'username': 'integrationuser',
+                'email': 'integration@example.com'
+            }
+            
+            # ユーザー情報取得 / Get user info
+            me_response = client.get("/api/v1/auth/me", headers=headers)
+            assert me_response.status_code == 200
+            
+            me_data = me_response.json()
+            assert me_data["status"] == "success"
+            assert "user" in me_data["data"]
+        
+        # 3. ログアウト / Logout
+        logout_response = client.post("/api/v1/auth/logout", headers=headers)
+        assert logout_response.status_code == 200
+        
+        logout_data = logout_response.json()
+        assert logout_data["status"] == "success"
+    
+    def test_full_application_flow_integration(self, client, mock_database_integration, 
+                                             mock_cognito_integration, integration_user_data):
+        """完全なアプリケーションフロー統合テスト / Full application flow integration test"""
+        # 1. ヘルスチェック / Health check
+        health_response = client.get("/api/v1/health/")
+        assert health_response.status_code == 200
+        
+        # 2. ログイン / Login
+        login_response = client.post("/api/v1/auth/login", json={
+            "email": "integration@example.com",
+            "password": "integrationpass123"
+        })
+        assert login_response.status_code == 200
+        
+        access_token = login_response.json()["data"]["access_token"]
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # 3. 認証済みユーザーとしてAPIを使用 / Use API as authenticated user
+        with patch('app.auth.dependencies.get_current_user') as mock_get_user, \
+             patch('app.repositories.user.UserRepository.get_multi') as mock_get_multi, \
+             patch('app.repositories.user.UserRepository.count') as mock_count:
+            
+            mock_get_user.return_value = {
+                'cognito_user_id': 'integration-user-id',
+                'username': 'integrationuser',
+                'scope': ['admin']
+            }
+            mock_get_multi.return_value = [integration_user_data]
+            mock_count.return_value = 1
+            
+            # ユーザー一覧取得 / Get users list
+            users_response = client.get("/api/v1/users/", headers=headers)
+            assert users_response.status_code == 200
+            
+            users_data = users_response.json()
+            assert users_data["status"] == "success"
+            assert len(users_data["data"]) == 1
+        
+        # 4. ログアウト / Logout
+        logout_response = client.post("/api/v1/auth/logout", headers=headers)
+        assert logout_response.status_code == 200
+        
+        # 5. ログアウト後は認証が必要なエンドポイントにアクセスできない
+        # After logout, cannot access authenticated endpoints
+        unauthorized_response = client.get("/api/v1/users/", headers=headers)
+        assert unauthorized_response.status_code == 401

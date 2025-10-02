@@ -6,8 +6,8 @@ export interface AuthFormProps {
   type: "login" | "register" | "forgot-password" | "reset-password";
   onSubmit: (data: any) => Promise<void>;
   loading?: boolean;
-  error?: string;
-  success?: string;
+  error?: string | null;
+  success?: string | null;
   initialData?: Record<string, string>;
   showPasswordStrength?: boolean;
   showSocialLogin?: boolean;
@@ -142,8 +142,8 @@ const AuthForm: React.FC<AuthFormProps> = ({
         title={getFormTitle()}
         onSubmit={handleSubmit}
         loading={loading}
-        error={error}
-        success={success}
+        error={error || undefined}
+        success={success || undefined}
         submitLabel={getSubmitLabel()}
         showSubmitButton={true}
       >
