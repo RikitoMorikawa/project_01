@@ -43,12 +43,32 @@ class CognitoTokenVerifier:
         
         return self._jwks_client
     
+    @jwks_client.setter
+    def jwks_client(self, value):
+        """Set JWKS client (for testing)"""
+        self._jwks_client = value
+    
+    @jwks_client.deleter
+    def jwks_client(self):
+        """Delete JWKS client (for testing)"""
+        self._jwks_client = None
+    
     @property
     def cognito_client(self):
         """Get or create Cognito client"""
         if self._cognito_client is None:
             self._cognito_client = boto3.client('cognito-idp', region_name=self.region)
         return self._cognito_client
+    
+    @cognito_client.setter
+    def cognito_client(self, value):
+        """Set Cognito client (for testing)"""
+        self._cognito_client = value
+    
+    @cognito_client.deleter
+    def cognito_client(self):
+        """Delete Cognito client (for testing)"""
+        self._cognito_client = None
     
     def verify_token(self, token: str) -> Dict[str, Any]:
         """

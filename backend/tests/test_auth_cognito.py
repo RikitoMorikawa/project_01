@@ -27,7 +27,7 @@ class TestCognitoTokenVerifier:
         """JWKSクライアントプロパティのテスト / Test JWKS client property"""
         verifier = CognitoTokenVerifier()
         
-        with patch('jwt.PyJWKClient') as mock_jwks_client:
+        with patch('app.auth.cognito.PyJWKClient') as mock_jwks_client:
             mock_client = Mock()
             mock_jwks_client.return_value = mock_client
             

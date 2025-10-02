@@ -24,7 +24,8 @@ def event_loop():
 @pytest.fixture
 def client() -> TestClient:
     """FastAPI テストクライアント / FastAPI test client"""
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture
@@ -68,6 +69,8 @@ def sample_user_profile_data() -> Dict[str, Any]:
 @pytest.fixture
 def mock_cognito_token_claims() -> Dict[str, Any]:
     """モックCognitoトークンクレーム / Mock Cognito token claims"""
+    import time
+    current_time = int(time.time())
     return {
         "sub": "test-cognito-id-123",
         "username": "testuser",
@@ -75,8 +78,8 @@ def mock_cognito_token_claims() -> Dict[str, Any]:
         "token_use": "access",
         "client_id": "test-client-id",
         "scope": "openid email profile",
-        "exp": 1704067200,  # 2024-01-01 00:00:00 UTC
-        "iat": 1704063600   # 2023-12-31 23:00:00 UTC
+        "exp": current_time + 3600,  # 1 hour from now
+        "iat": current_time - 300    # 5 minutes ago
     }
 
 
@@ -198,13 +201,19 @@ def mock_cognito_client():
 
 
 @pytest.fixture(autouse=True)
-def setup_test_environment():
+def setup_test_environment(monkeypatch):
     """テスト環境のセットアップ / Test environment setup"""
-    # テスト用の設定を適用 / Apply test configuration
-    original_environment = settings.environment
+    # テスト用の環境変数を設定 / Set test environment variables
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "test-user-pool-id")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key")
+    
+    # 設定を再読み込み / Reload settings
+    from app.config import settings
     settings.environment = "test"
+    settings.cognito_user_pool_id = "test-user-pool-id"
+    settings.cognito_client_id = "test-client-id"
+    settings.jwt_secret_key = "test-secret-key"
     
     yield
-    
-    # 元の設定を復元 / Restore original configuration
-    settings.environment = original_environment
