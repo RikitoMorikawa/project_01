@@ -1,0 +1,24 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy configuration files
+COPY next.config.js ./
+COPY tsconfig.json ./
+COPY tailwind.config.js ./
+COPY postcss.config.js ./
+
+# Copy application code
+COPY . .
+
+# Expose port
+EXPOSE 3000
+
+# Command will be overridden by docker-compose
+CMD ["npm", "run", "dev"]

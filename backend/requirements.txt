@@ -1,0 +1,10 @@
+# Core FastAPI dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Database
+pymysql==1.1.0
+
+# Basic utilities
+pydantic==2.5.0
+requests==2.31.0

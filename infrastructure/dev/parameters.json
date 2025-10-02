@@ -1,0 +1,10 @@
+{
+  "Environment": "dev",
+  "DatabaseInstanceClass": "db.t3.small",
+  "DatabaseMultiAZ": false,
+  "LambdaMemorySize": 128,
+  "LambdaProvisionedConcurrency": 0,
+  "CloudFrontEnabled": false,
+  "WAFEnabled": false,
+  "DatabaseName": "csr_lambda_dev"
+}

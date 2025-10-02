@@ -1,0 +1,11 @@
+{
+  "Environment": "prod",
+  "DatabaseInstanceClass": "db.t3.medium",
+  "DatabaseMultiAZ": true,
+  "LambdaMemorySize": 1024,
+  "LambdaProvisionedConcurrency": 10,
+  "CloudFrontEnabled": true,
+  "WAFEnabled": true,
+  "DatabaseName": "csr_lambda_prod",
+  "DatabaseReadReplica": true
+}

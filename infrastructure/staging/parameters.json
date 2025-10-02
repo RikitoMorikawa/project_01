@@ -1,0 +1,10 @@
+{
+  "Environment": "staging",
+  "DatabaseInstanceClass": "db.t3.small",
+  "DatabaseMultiAZ": true,
+  "LambdaMemorySize": 512,
+  "LambdaProvisionedConcurrency": 0,
+  "CloudFrontEnabled": true,
+  "WAFEnabled": false,
+  "DatabaseName": "csr_lambda_staging"
+}

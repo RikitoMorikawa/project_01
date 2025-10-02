@@ -1,0 +1,11 @@
+{
+  "ProjectName": "csr-lambda-api",
+  "Region": "ap-northeast-1",
+  "VpcCidr": "10.0.0.0/16",
+  "PublicSubnet1Cidr": "10.0.1.0/24",
+  "PublicSubnet2Cidr": "10.0.2.0/24",
+  "PrivateSubnet1Cidr": "10.0.3.0/24",
+  "PrivateSubnet2Cidr": "10.0.4.0/24",
+  "AvailabilityZone1": "ap-northeast-1a",
+  "AvailabilityZone2": "ap-northeast-1c"
+}
