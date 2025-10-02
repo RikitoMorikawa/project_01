@@ -248,11 +248,26 @@ Resources:
               IpAddress:
                 aws:SourceIp:
                   - 0.0.0.0/0 # 本番環境では適切な IP 制限を設定
+      BinaryMediaTypes:
+        - "image/*"
+        - "application/octet-stream"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-${Environment}-api"
         - Key: Environment
           Value: !Ref Environment
+
+  # Cognito オーソライザー
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      RestApiId: !Ref ApiGateway
+      Name: !Sub "${ProjectName}-${Environment}-cognito-authorizer"
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      AuthorizerResultTtlInSeconds: 300
+      ProviderARNs:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cognito-user-pool-arn"
 
   # API Gateway リクエストバリデーター
   ApiGatewayRequestValidator:
@@ -290,6 +305,7 @@ Resources:
     DependsOn:
       - ApiGatewayProxyMethod
       - ApiGatewayRootMethod
+      - ApiGatewayOptionsMethod
     Properties:
       RestApiId: !Ref ApiGateway
       StageName: !Ref Environment
@@ -367,8 +383,45 @@ Resources:
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${ApiLambdaAlias}/invocations"
         IntegrationResponses:
           - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
       MethodResponses:
         - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+          ResponseModels:
+            application/json: Empty
+
+  # CORS OPTIONS メソッド
+  ApiGatewayOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayProxyResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+            ResponseTemplates:
+              application/json: ""
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: false
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
           ResponseModels:
             application/json: Empty
 
@@ -668,3 +721,9 @@ Outputs:
     Value: !Ref ApiGatewayUsagePlan
     Export:
       Name: !Sub "${ProjectName}-${Environment}-api-usage-plan-id"
+
+  CognitoAuthorizerId:
+    Description: Cognito オーソライザー ID
+    Value: !Ref CognitoAuthorizer
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cognito-authorizer-id"

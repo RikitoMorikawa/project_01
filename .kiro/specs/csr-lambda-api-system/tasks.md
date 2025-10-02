@@ -146,15 +146,15 @@
   - 本番用 S3 バケット、CloudFront、WAF を設定
   - _要件: 3.2, 4.1, 7.2, 7.3_
 
-- [ ] 8. API Gateway と CloudFront の設定
-- [ ] 8.1 API Gateway の設定を実装
+- [x] 8. API Gateway と CloudFront の設定
+- [x] 8.1 API Gateway の設定を実装
 
   - REST API の CloudFormation 定義を作成
   - Lambda 統合とオーソライザー設定を実装
   - CORS とスロットリング設定を実装
   - _要件: 2.1, 6.2_
 
-- [ ] 8.2 S3 と CloudFront の設定を実装
+- [x] 8.2 S3 と CloudFront の設定を実装
 
   - S3 バケットの静的ウェブサイトホスティング設定を実装
   - CloudFront ディストリビューションの設定を作成

@@ -24,9 +24,33 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: WAF を有効にするかどうか
 
+  CustomDomainName:
+    Type: String
+    Default: ""
+    Description: カスタムドメイン名（例：www.example.com）。空の場合はCloudFrontデフォルトドメインを使用
+
+  SSLCertificateArn:
+    Type: String
+    Default: ""
+    Description: SSL証明書のARN（us-east-1リージョンのACM証明書）。カスタムドメイン使用時に必要
+
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route 53 ホストゾーン ID。カスタムドメイン使用時に必要
+
 Conditions:
   EnableCloudFront: !Equals [!Ref CloudFrontEnabled, "true"]
   EnableWAF: !And [!Condition EnableCloudFront, !Equals [!Ref WAFEnabled, "true"]]
+  HasCustomDomain: !And
+    - !Condition EnableCloudFront
+    - !Not [!Equals [!Ref CustomDomainName, ""]]
+  HasSSLCertificate: !And
+    - !Condition HasCustomDomain
+    - !Not [!Equals [!Ref SSLCertificateArn, ""]]
+  HasHostedZone: !And
+    - !Condition HasCustomDomain
+    - !Not [!Equals [!Ref HostedZoneId, ""]]
 
 Resources:
   # S3 バケット（静的ウェブサイトホスティング用）
@@ -194,6 +218,19 @@ Resources:
         Enabled: true
         HttpVersion: http2and3
         IPV6Enabled: true
+        Aliases: !If
+          - HasCustomDomain
+          - [!Ref CustomDomainName]
+          - !Ref "AWS::NoValue"
+        ViewerCertificate: !If
+          - HasSSLCertificate
+          - AcmCertificateArn: !Ref SSLCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - !If
+            - HasCustomDomain
+            - CloudFrontDefaultCertificate: true
+            - CloudFrontDefaultCertificate: true
         Origins:
           - Id: S3Origin
             DomainName: !GetAtt FrontendS3Bucket.RegionalDomainName
@@ -436,6 +473,19 @@ Resources:
           Value: !Sub "${ProjectName}-${Environment}-s3-logs"
         - Key: Environment
           Value: !Ref Environment
+
+  # Route 53 DNS レコード（カスタムドメイン用）
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref CustomDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2 # CloudFront のホストゾーン ID（固定値）
+        EvaluateTargetHealth: false
 
   # デプロイメント用 IAM ロール
   DeploymentRole:
@@ -732,3 +782,17 @@ Outputs:
     Value: !Ref FrontendCriticalAlarmTopic
     Export:
       Name: !Sub "${ProjectName}-${Environment}-frontend-critical-alarm-topic-arn"
+
+  CustomDomainName:
+    Condition: HasCustomDomain
+    Description: カスタムドメイン名
+    Value: !Ref CustomDomainName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-custom-domain-name"
+
+  SSLCertificateArn:
+    Condition: HasSSLCertificate
+    Description: SSL証明書ARN
+    Value: !Ref SSLCertificateArn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-ssl-certificate-arn"
