@@ -13,10 +13,7 @@ from app.main import app
 class TestAPIIntegration:
     """API統合テストクラス / API integration test class"""
     
-    @pytest.fixture
-    def client(self):
-        """テストクライアント / Test client"""
-        return TestClient(app)
+    # TestClientはconftest.pyのグローバルフィクスチャを使用
     
     @pytest.fixture
     def mock_database_integration(self):

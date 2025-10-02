@@ -33,8 +33,13 @@ def mock_db_connection():
     """モックデータベース接続 / Mock database connection"""
     mock_connection = Mock(spec=pymysql.Connection)
     mock_cursor = Mock()
-    mock_connection.cursor.return_value.__enter__.return_value = mock_cursor
-    mock_connection.cursor.return_value.__exit__.return_value = None
+    
+    # コンテキストマネージャーとして動作するモックカーソルを作成
+    mock_cursor_context = Mock()
+    mock_cursor_context.__enter__ = Mock(return_value=mock_cursor)
+    mock_cursor_context.__exit__ = Mock(return_value=None)
+    
+    mock_connection.cursor.return_value = mock_cursor_context
     return mock_connection, mock_cursor
 
 

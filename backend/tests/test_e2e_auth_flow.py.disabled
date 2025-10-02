@@ -13,10 +13,7 @@ from app.main import app
 class TestE2EAuthFlow:
     """認証フロー全体のE2Eテストクラス / End-to-end authentication flow test class"""
     
-    @pytest.fixture
-    def client(self):
-        """テストクライアント / Test client"""
-        return TestClient(app)
+    # TestClientはconftest.pyのグローバルフィクスチャを使用
     
     @pytest.fixture
     def e2e_user_data(self):
