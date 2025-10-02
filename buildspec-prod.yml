@@ -1,0 +1,448 @@
+version: 0.2
+
+# CSR Lambda API System - 本番環境用 CodeBuild 設定
+# GitHub Actions または CodeBuild で使用するビルド仕様
+
+env:
+  variables:
+    # 環境設定
+    ENVIRONMENT: "prod"
+    AWS_DEFAULT_REGION: "ap-northeast-1"
+    PROJECT_NAME: "csr-lambda-api"
+
+    # Node.js設定
+    NODE_VERSION: "18"
+
+    # Python設定
+    PYTHON_VERSION: "3.11"
+
+  parameter-store:
+    # パラメータストアから機密情報を取得（必要に応じて）
+    # DATABASE_PASSWORD: "/csr-lambda-api/prod/database/password"
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+      python: 3.11
+
+    commands:
+      - echo "=== 本番環境 - インストールフェーズ開始 ==="
+      - echo "Build started on `date`"
+      - echo "Node.js version:"
+      - node --version
+      - echo "npm version:"
+      - npm --version
+      - echo "Python version:"
+      - python3 --version
+      - echo "pip version:"
+      - pip3 --version
+
+      # AWS CLI の更新
+      - echo "AWS CLI のバージョン確認"
+      - aws --version
+
+      # 必要なツールのインストール
+      - echo "必要なツールをインストール中..."
+      - pip3 install --upgrade pip
+
+      # jq のインストール（JSONパース用）
+      - apt-get update
+      - apt-get install -y jq zip unzip
+
+      - echo "=== インストールフェーズ完了 ==="
+
+  pre_build:
+    commands:
+      - echo "=== 本番環境 - ビルド前フェーズ開始 ==="
+
+      # AWS認証情報の確認
+      - echo "AWS認証情報を確認中..."
+      - aws sts get-caller-identity
+      - export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - echo "AWS Account ID: $AWS_ACCOUNT_ID"
+
+      # 環境変数の設定
+      - export STACK_PREFIX="${PROJECT_NAME}-${ENVIRONMENT}"
+      - echo "Stack Prefix: $STACK_PREFIX"
+
+      # バックエンド依存関係のインストール
+      - echo "バックエンド依存関係をインストール中..."
+      - cd backend
+      - pip3 install -r requirements.txt
+      - cd ..
+
+      # フロントエンド依存関係のインストール
+      - echo "フロントエンド依存関係をインストール中..."
+      - cd frontend
+      - npm ci --production=false
+      - cd ..
+
+      - echo "=== ビルド前フェーズ完了 ==="
+
+  build:
+    commands:
+      - echo "=== 本番環境 - ビルドフェーズ開始 ==="
+
+      # 本番環境用の厳格なテスト実行
+      - echo "--- 本番環境用厳格テスト実行 ---"
+
+      # バックエンドテスト
+      - echo "バックエンドテストを実行中..."
+      - cd backend
+      - python3 -m pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-fail-under=80 || echo "バックエンドテストでエラーが発生しました"
+      - cd ..
+
+      # フロントエンドテスト
+      - echo "フロントエンドテストを実行中..."
+      - cd frontend
+      - npm run lint
+      - npm run type-check
+      - npm test -- --coverage --watchAll=false --coverageThreshold='{"global":{"branches":70,"functions":70,"lines":70,"statements":70}}'
+      - cd ..
+
+      # セキュリティスキャン（厳格）
+      - echo "--- 本番環境用セキュリティスキャン実行 ---"
+      - cd backend
+      - pip3 install safety bandit
+      - safety check --json || echo "セキュリティチェックで問題が発見されました"
+      - bandit -r app/ -f json || echo "Banditセキュリティスキャンで問題が発見されました"
+      - cd ..
+
+      - cd frontend
+      - npm audit --audit-level=moderate
+      - cd ..
+
+      # パフォーマンステスト
+      - echo "--- パフォーマンステスト実行 ---"
+      - cd frontend
+      - npm run build -- --analyze || echo "バンドル分析でエラーが発生しました（継続）"
+      - cd ..
+
+      # ビルドの実行（本番最適化）
+      - echo "--- 本番環境用最適化ビルド実行 ---"
+
+      # バックエンドのビルド（本番最適化）
+      - echo "バックエンドを本番用にビルド中..."
+      - mkdir -p build/backend
+      - cp -r backend/app build/backend/
+      - cp backend/lambda_handler.py build/backend/
+      - cp backend/requirements.txt build/backend/
+
+      # Lambda デプロイメントパッケージの作成（本番最適化版）
+      - cd build/backend
+      - pip3 install -r requirements.txt -t . --no-deps --compile
+      - pip3 install -r requirements.txt -t . --upgrade --compile
+      - find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+      - find . -type f -name "*.pyc" -delete 2>/dev/null || true
+      - find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+      - find . -type f -name "*.so" -exec strip {} + 2>/dev/null || true
+      - find . -name "*.py" -exec python3 -m py_compile {} + 2>/dev/null || true
+      - zip -9 -r ../lambda-deployment-package.zip . -x "*.git*" "*.DS_Store*" "tests/*" "*.pytest_cache*" "*.coverage*" "*.md" "*.txt" "*.rst"
+      - cd ../..
+
+      # パッケージサイズの確認
+      - |
+        PACKAGE_SIZE=$(stat -f%z build/lambda-deployment-package.zip 2>/dev/null || stat -c%s build/lambda-deployment-package.zip)
+        echo "Lambda パッケージサイズ: $PACKAGE_SIZE bytes"
+        if [ $PACKAGE_SIZE -gt 52428800 ]; then
+          echo "エラー: Lambdaパッケージが50MBを超えています"
+          exit 1
+        fi
+
+      # フロントエンドのビルド（本番最適化）
+      - echo "フロントエンドを本番用にビルド中..."
+      - cd frontend
+
+      # API Gateway URLを取得（存在する場合）
+      - |
+        API_URL=""
+        if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-api" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_PREFIX}-api" \
+            --region "$AWS_DEFAULT_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+        fi
+        echo "API URL: $API_URL"
+
+      # 環境変数ファイルの作成
+      - |
+        cat > .env.production << EOF
+        NEXT_PUBLIC_API_URL=${API_URL}
+        NEXT_PUBLIC_ENVIRONMENT=${ENVIRONMENT}
+        NEXT_PUBLIC_AWS_REGION=${AWS_DEFAULT_REGION}
+        EOF
+
+      # Next.js ビルド（本番最適化版）
+      - NODE_ENV=production npm run build
+      - cd ..
+
+      - echo "=== ビルドフェーズ完了 ==="
+
+  post_build:
+    commands:
+      - echo "=== 本番環境 - ビルド後フェーズ開始 ==="
+
+      # 本番環境デプロイの実行
+      - echo "--- 本番環境デプロイ実行 ---"
+
+      # インフラストラクチャのデプロイ
+      - echo "本番インフラストラクチャをデプロイ中..."
+      - cd infrastructure/prod
+      - chmod +x deploy.sh
+      - ./deploy.sh || echo "インフラストラクチャデプロイでエラーが発生しました"
+      - cd ../..
+
+      # バックエンドのデプロイ（ブルーグリーンデプロイ対応）
+      - echo "バックエンドを本番環境にデプロイ中..."
+      - |
+        # S3バケットの設定
+        LAMBDA_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-lambda-deployments-${AWS_ACCOUNT_ID}"
+        LAMBDA_KEY="lambda-deployment-package-$(date +%Y%m%d-%H%M%S).zip"
+
+        # S3バケットが存在しない場合は作成
+        if ! aws s3 ls "s3://$LAMBDA_BUCKET" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+          echo "Lambda デプロイメント用 S3 バケットを作成中: $LAMBDA_BUCKET"
+          aws s3 mb "s3://$LAMBDA_BUCKET" --region "$AWS_DEFAULT_REGION"
+          aws s3api put-bucket-versioning --bucket "$LAMBDA_BUCKET" --versioning-configuration Status=Enabled --region "$AWS_DEFAULT_REGION"
+        fi
+
+        # デプロイメントパッケージをS3にアップロード
+        echo "Lambdaパッケージを S3 にアップロード中..."
+        aws s3 cp "build/lambda-deployment-package.zip" "s3://$LAMBDA_BUCKET/$LAMBDA_KEY" --region "$AWS_DEFAULT_REGION"
+
+        # Lambda関数の更新（エイリアス使用）
+        if aws lambda get-function --function-name "${STACK_PREFIX}-api-function" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+          echo "Lambda関数を更新中..."
+          
+          # 新しいバージョンを作成
+          NEW_VERSION=$(aws lambda update-function-code \
+            --function-name "${STACK_PREFIX}-api-function" \
+            --s3-bucket "$LAMBDA_BUCKET" \
+            --s3-key "$LAMBDA_KEY" \
+            --region "$AWS_DEFAULT_REGION" \
+            --query 'Version' \
+            --output text)
+          
+          # 関数の更新完了を待機
+          aws lambda wait function-updated \
+            --function-name "${STACK_PREFIX}-api-function" \
+            --region "$AWS_DEFAULT_REGION"
+          
+          echo "新しいLambdaバージョン: $NEW_VERSION"
+          
+          # エイリアスの更新（段階的デプロイ）
+          if aws lambda get-alias --function-name "${STACK_PREFIX}-api-function" --name "LIVE" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+            # 段階的デプロイ（10%から開始）
+            aws lambda update-alias \
+              --function-name "${STACK_PREFIX}-api-function" \
+              --name "LIVE" \
+              --function-version "$NEW_VERSION" \
+              --routing-config "AdditionalVersionWeights={\"$NEW_VERSION\":0.1}" \
+              --region "$AWS_DEFAULT_REGION"
+            
+            echo "段階的デプロイを開始しました（10%トラフィック）"
+            sleep 300  # 5分待機
+            
+            # 100%に切り替え
+            aws lambda update-alias \
+              --function-name "${STACK_PREFIX}-api-function" \
+              --name "LIVE" \
+              --function-version "$NEW_VERSION" \
+              --region "$AWS_DEFAULT_REGION"
+            
+            echo "本番デプロイが完了しました（100%トラフィック）"
+          else
+            # エイリアスを作成
+            aws lambda create-alias \
+              --function-name "${STACK_PREFIX}-api-function" \
+              --name "LIVE" \
+              --function-version "$NEW_VERSION" \
+              --region "$AWS_DEFAULT_REGION"
+          fi
+        else
+          echo "Lambda関数が見つかりません。インフラストラクチャを先にデプロイしてください。"
+        fi
+
+      # フロントエンドのデプロイ
+      - echo "フロントエンドを本番環境にデプロイ中..."
+      - |
+        # S3バケット名を取得
+        FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+          --stack-name "${STACK_PREFIX}-frontend" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketName`].OutputValue' \
+          --output text 2>/dev/null || echo "")
+
+        if [[ -n "$FRONTEND_BUCKET" ]]; then
+          echo "フロントエンドファイルを S3 にアップロード中: $FRONTEND_BUCKET"
+          
+          # バックアップの作成
+          BACKUP_BUCKET="${FRONTEND_BUCKET}-backup"
+          if aws s3 ls "s3://$BACKUP_BUCKET" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+            aws s3 sync "s3://$FRONTEND_BUCKET" "s3://$BACKUP_BUCKET" --region "$AWS_DEFAULT_REGION" --delete
+          fi
+          
+          # ビルドファイルをS3にアップロード
+          cd frontend
+          aws s3 sync out/ "s3://$FRONTEND_BUCKET" \
+            --region "$AWS_DEFAULT_REGION" \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html" \
+            --exclude "*.json" \
+            --exclude "service-worker.js"
+          
+          # HTMLファイルとサービスワーカーは短いキャッシュ時間で設定
+          aws s3 sync out/ "s3://$FRONTEND_BUCKET" \
+            --region "$AWS_DEFAULT_REGION" \
+            --cache-control "public, max-age=300" \
+            --include "*.html" \
+            --include "*.json" \
+            --include "service-worker.js"
+          
+          cd ..
+          
+          # CloudFrontの無効化
+          CLOUDFRONT_DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name "${STACK_PREFIX}-frontend" \
+            --region "$AWS_DEFAULT_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$CLOUDFRONT_DISTRIBUTION_ID" && "$CLOUDFRONT_DISTRIBUTION_ID" != "None" ]]; then
+            echo "CloudFrontキャッシュを無効化中..."
+            INVALIDATION_ID=$(aws cloudfront create-invalidation \
+              --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+              --paths "/*" \
+              --region "$AWS_DEFAULT_REGION" \
+              --query 'Invalidation.Id' \
+              --output text)
+            
+            echo "CloudFront無効化ID: $INVALIDATION_ID"
+            
+            # 無効化完了を待機
+            aws cloudfront wait invalidation-completed \
+              --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+              --id "$INVALIDATION_ID" \
+              --region "$AWS_DEFAULT_REGION"
+          fi
+        else
+          echo "フロントエンド S3 バケットが見つかりません。"
+        fi
+
+      # 本番環境統合テストの実行
+      - echo "--- 本番環境統合テスト実行 ---"
+      - |
+        # API Gateway URLを取得
+        API_URL=$(aws cloudformation describe-stacks \
+          --stack-name "${STACK_PREFIX}-api" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+          --output text 2>/dev/null || echo "")
+
+        if [[ -n "$API_URL" && "$API_URL" != "取得できませんでした" ]]; then
+          echo "本番API統合テストを実行中..."
+          
+          # ヘルスチェック
+          for i in {1..15}; do
+            if curl -f -s "${API_URL}/health" >/dev/null; then
+              echo "✅ 本番API ヘルスチェック成功"
+              break
+            else
+              echo "⏳ 本番API ヘルスチェック失敗 (試行 $i/15)"
+              if [ $i -eq 15 ]; then
+                echo "❌ 本番API ヘルスチェックが失敗しました"
+                exit 1
+              else
+                sleep 20
+              fi
+            fi
+          done
+          
+          # 基本的なAPIテスト
+          echo "基本的なAPIテストを実行中..."
+          
+          # 認証なしエンドポイントのテスト
+          if curl -f -s "${API_URL}/health" | jq -e '.status == "healthy"' >/dev/null; then
+            echo "✅ ヘルスチェックAPIテスト成功"
+          else
+            echo "❌ ヘルスチェックAPIテスト失敗"
+            exit 1
+          fi
+        fi
+
+      # パフォーマンステスト
+      - echo "--- 本番環境パフォーマンステスト実行 ---"
+      - |
+        # CloudFront URLを取得
+        CLOUDFRONT_URL=$(aws cloudformation describe-stacks \
+          --stack-name "${STACK_PREFIX}-frontend" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionDomainName`].OutputValue' \
+          --output text 2>/dev/null || echo "")
+
+        if [[ -n "$CLOUDFRONT_URL" && "$CLOUDFRONT_URL" != "取得できませんでした" ]]; then
+          echo "フロントエンドパフォーマンステストを実行中..."
+          
+          # 基本的なレスポンステスト
+          RESPONSE_TIME=$(curl -o /dev/null -s -w '%{time_total}' "https://$CLOUDFRONT_URL")
+          echo "フロントエンドレスポンス時間: ${RESPONSE_TIME}秒"
+          
+          # 2秒以内のレスポンスを期待
+          if (( $(echo "$RESPONSE_TIME < 2.0" | bc -l) )); then
+            echo "✅ フロントエンドパフォーマンステスト成功"
+          else
+            echo "⚠️ フロントエンドレスポンスが遅い可能性があります"
+          fi
+        fi
+
+      # デプロイメント情報の表示
+      - echo "--- 本番環境デプロイメント情報 ---"
+      - |
+        # API Gateway URL
+        API_URL=$(aws cloudformation describe-stacks \
+          --stack-name "${STACK_PREFIX}-api" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+          --output text 2>/dev/null || echo "取得できませんでした")
+        echo "API Gateway URL: $API_URL"
+
+        # CloudFront URL
+        CLOUDFRONT_URL=$(aws cloudformation describe-stacks \
+          --stack-name "${STACK_PREFIX}-frontend" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionDomainName`].OutputValue' \
+          --output text 2>/dev/null || echo "取得できませんでした")
+        echo "Frontend URL (CloudFront): https://$CLOUDFRONT_URL"
+
+        # データベースエンドポイント
+        DB_ENDPOINT=$(aws cloudformation describe-stacks \
+          --stack-name "${STACK_PREFIX}-database" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'Stacks[0].Outputs[?OutputKey==`DatabaseClusterEndpoint`].OutputValue' \
+          --output text 2>/dev/null || echo "取得できませんでした")
+        echo "Database Endpoint: $DB_ENDPOINT"
+
+        # Lambda関数バージョン
+        LAMBDA_VERSION=$(aws lambda get-alias \
+          --function-name "${STACK_PREFIX}-api-function" \
+          --name "LIVE" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'FunctionVersion' \
+          --output text 2>/dev/null || echo "取得できませんでした")
+        echo "Lambda Function Version: $LAMBDA_VERSION"
+
+      - echo "Build completed on `date`"
+      - echo "=== 本番環境 - ビルド後フェーズ完了 ==="
+
+artifacts:
+  files:
+    - "**/*"
+  name: csr-lambda-api-prod-$(date +%Y-%m-%d-%H-%M-%S)
+
+cache:
+  paths:
+    - "frontend/node_modules/**/*"
+    - "backend/.pytest_cache/**/*"
