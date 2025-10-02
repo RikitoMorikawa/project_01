@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { Layout } from "@/components/layout";
-import { Button, Input, Card } from "@/components/ui";
+import { Button, Input, Card, Form } from "@/components/ui";
 import { useAuth } from "@/hooks/use-auth";
 import { withGuestGuard } from "@/components/auth/AuthGuard";
 
@@ -222,16 +222,15 @@ function Register() {
 
         <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
           <Card className="py-8 px-4 sm:px-10">
-            {/* エラーメッセージ */}
-            {(errors.general || error) && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-md">
-                <p className="text-sm text-red-600">{errors.general || error}</p>
-              </div>
-            )}
-
             {step === "signup" ? (
               /* サインアップフォーム */
-              <form onSubmit={handleSignUpSubmit} className="space-y-6">
+              <Form
+                onSubmit={handleSignUpSubmit}
+                loading={isLoading}
+                error={errors.general || error || undefined}
+                submitLabel="アカウントを作成"
+                showSubmitButton={true}
+              >
                 <Input
                   label="ユーザー名"
                   type="text"
@@ -299,14 +298,16 @@ function Register() {
                     に同意します
                   </label>
                 </div>
-
-                <Button type="submit" loading={isLoading} fullWidth size="lg">
-                  アカウントを作成
-                </Button>
-              </form>
+              </Form>
             ) : (
               /* 確認コードフォーム */
-              <form onSubmit={handleConfirmSubmit} className="space-y-6">
+              <Form
+                onSubmit={handleConfirmSubmit}
+                loading={isLoading}
+                error={errors.general || error || undefined}
+                submitLabel="アカウントを確認"
+                showSubmitButton={true}
+              >
                 <div className="text-center mb-6">
                   <p className="text-sm text-gray-600">
                     <strong>{signUpForm.email}</strong> に確認コードを送信しました
@@ -325,11 +326,7 @@ function Register() {
                   maxLength={6}
                 />
 
-                <Button type="submit" loading={isLoading} fullWidth size="lg">
-                  アカウントを確認
-                </Button>
-
-                <div className="text-center space-y-2">
+                <div className="text-center space-y-2 mt-4">
                   <button
                     type="button"
                     onClick={handleResendCode}
@@ -345,7 +342,7 @@ function Register() {
                     </button>
                   </div>
                 </div>
-              </form>
+              </Form>
             )}
 
             {/* 戻るリンク */}

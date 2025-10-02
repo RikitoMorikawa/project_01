@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "next/link";
 import { Button } from "../ui";
+import Navigation, { NavigationItem } from "./Navigation";
 
 export interface HeaderProps {
   title?: string;
@@ -12,9 +13,29 @@ export interface HeaderProps {
   } | null;
   onLogin?: () => void;
   onLogout?: () => void;
+  navigationItems?: NavigationItem[];
+  showNavigation?: boolean;
 }
 
-const Header: React.FC<HeaderProps> = ({ title = "CSR Lambda API", showAuth = true, isAuthenticated = false, user = null, onLogin, onLogout }) => {
+const Header: React.FC<HeaderProps> = ({
+  title = "CSR Lambda API",
+  showAuth = true,
+  isAuthenticated = false,
+  user = null,
+  onLogin,
+  onLogout,
+  navigationItems = [],
+  showNavigation = true,
+}) => {
+  // デフォルトのナビゲーションアイテム
+  const defaultNavigationItems: NavigationItem[] = [
+    { label: "ホーム", href: "/" },
+    { label: "ダッシュボード", href: "/dashboard", requiresAuth: true },
+    { label: "プロフィール", href: "/profile", requiresAuth: true },
+    { label: "サービスについて", href: "/about" },
+  ];
+
+  const navItems = navigationItems.length > 0 ? navigationItems : defaultNavigationItems;
   return (
     <header className="bg-white shadow-sm border-b border-gray-200">
       <div className="container">
@@ -30,24 +51,7 @@ const Header: React.FC<HeaderProps> = ({ title = "CSR Lambda API", showAuth = tr
           </div>
 
           {/* ナビゲーション */}
-          <nav className="hidden md:flex items-center space-x-6">
-            <Link href="/" className="text-gray-600 hover:text-gray-900 transition">
-              ホーム
-            </Link>
-            {isAuthenticated && (
-              <>
-                <Link href="/dashboard" className="text-gray-600 hover:text-gray-900 transition">
-                  ダッシュボード
-                </Link>
-                <Link href="/profile" className="text-gray-600 hover:text-gray-900 transition">
-                  プロフィール
-                </Link>
-              </>
-            )}
-            <Link href="/about" className="text-gray-600 hover:text-gray-900 transition">
-              サービスについて
-            </Link>
-          </nav>
+          {showNavigation && <Navigation items={navItems} isAuthenticated={isAuthenticated} orientation="horizontal" />}
 
           {/* 認証ボタン */}
           {showAuth && (
@@ -83,15 +87,6 @@ const Header: React.FC<HeaderProps> = ({ title = "CSR Lambda API", showAuth = tr
               )}
             </div>
           )}
-
-          {/* モバイルメニューボタン */}
-          <div className="md:hidden">
-            <button className="text-gray-600 hover:text-gray-900">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </button>
-          </div>
         </div>
       </div>
     </header>

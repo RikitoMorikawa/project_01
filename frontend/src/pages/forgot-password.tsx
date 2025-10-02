@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { Layout } from "@/components/layout";
-import { Button, Input, Card } from "@/components/ui";
+import { Button, Input, Card, Form } from "@/components/ui";
 import { useAuth } from "@/hooks/use-auth";
 import { withGuestGuard } from "@/components/auth/AuthGuard";
 
@@ -187,16 +187,15 @@ function ForgotPassword() {
 
         <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
           <Card className="py-8 px-4 sm:px-10">
-            {/* エラーメッセージ */}
-            {(errors.general || error) && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-md">
-                <p className="text-sm text-red-600">{errors.general || error}</p>
-              </div>
-            )}
-
             {step === "request" ? (
               /* パスワードリセット要求フォーム */
-              <form onSubmit={handleForgotSubmit} className="space-y-6">
+              <Form
+                onSubmit={handleForgotSubmit}
+                loading={isLoading}
+                error={errors.general || error || undefined}
+                submitLabel="リセットコードを送信"
+                showSubmitButton={true}
+              >
                 <Input
                   label="メールアドレス"
                   type="email"
@@ -208,14 +207,16 @@ function ForgotPassword() {
                   autoComplete="email"
                   placeholder="your@example.com"
                 />
-
-                <Button type="submit" loading={isLoading} fullWidth size="lg">
-                  リセットコードを送信
-                </Button>
-              </form>
+              </Form>
             ) : (
               /* パスワードリセット確認フォーム */
-              <form onSubmit={handleResetSubmit} className="space-y-6">
+              <Form
+                onSubmit={handleResetSubmit}
+                loading={isLoading}
+                error={errors.general || error || undefined}
+                submitLabel="パスワードを変更"
+                showSubmitButton={true}
+              >
                 <Input
                   label="確認コード"
                   type="text"
@@ -251,16 +252,12 @@ function ForgotPassword() {
                   placeholder="新しいパスワードを再入力"
                 />
 
-                <Button type="submit" loading={isLoading} fullWidth size="lg">
-                  パスワードを変更
-                </Button>
-
-                <div className="text-center">
+                <div className="text-center mt-4">
                   <button type="button" onClick={() => setStep("request")} className="text-sm text-blue-600 hover:text-blue-500">
                     ← メールアドレス入力に戻る
                   </button>
                 </div>
-              </form>
+              </Form>
             )}
 
             {/* 戻るリンク */}

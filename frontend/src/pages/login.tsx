@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { Layout } from "@/components/layout";
-import { Button, Input, Card } from "@/components/ui";
+import { Button, Input, Card, Form } from "@/components/ui";
 import { useAuth } from "@/hooks/use-auth";
 import { LoginCredentials } from "@/types";
 import { withGuestGuard } from "@/components/auth/AuthGuard";
@@ -113,15 +113,8 @@ function Login() {
 
         <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
           <Card className="py-8 px-4 sm:px-10">
-            {/* エラーメッセージ */}
-            {(errors.general || error) && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-md">
-                <p className="text-sm text-red-600">{errors.general || error}</p>
-              </div>
-            )}
-
             {/* ログインフォーム */}
-            <form onSubmit={handleSubmit} className="space-y-6">
+            <Form onSubmit={handleSubmit} loading={isLoginPending} error={errors.general || error || undefined} submitLabel="ログイン" showSubmitButton={true}>
               <Input
                 label="メールアドレス"
                 type="email"
@@ -158,11 +151,7 @@ function Login() {
                   パスワードを忘れた場合
                 </button>
               </div>
-
-              <Button type="submit" loading={isLoginPending} fullWidth size="lg">
-                ログイン
-              </Button>
-            </form>
+            </Form>
 
             {/* ソーシャルログイン */}
             <div className="mt-6">
