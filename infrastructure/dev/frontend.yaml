@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Development Environment S3 and CloudFront for Frontend"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: dev
+    Description: 環境名
+
+  CloudFrontEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: CloudFront を有効にするかどうか
+
+Conditions:
+  EnableCloudFront: !Equals [!Ref CloudFrontEnabled, "true"]
+
+Resources:
+  # S3 バケット（静的ウェブサイトホスティング用）
+  FrontendS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      VersioningConfiguration:
+        Status: Enabled
+      NotificationConfiguration:
+        CloudWatchConfigurations:
+          - Event: s3:ObjectCreated:*
+            CloudWatchConfiguration:
+              LogGroupName: !Ref S3LogGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # S3 バケットポリシー（パブリック読み取りアクセス）
+  FrontendS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendS3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendS3Bucket}/*"
+          - !If
+            - EnableCloudFront
+            - Sid: CloudFrontOriginAccessIdentity
+              Effect: Allow
+              Principal:
+                AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}"
+              Action: s3:GetObject
+              Resource: !Sub "${FrontendS3Bucket}/*"
+            - !Ref "AWS::NoValue"
+
+  # CloudFront Origin Access Identity
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Condition: EnableCloudFront
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "${ProjectName} ${Environment} OAI"
+
+  # CloudFront ディストリビューション
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: EnableCloudFront
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${ProjectName} ${Environment} CloudFront Distribution"
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          DefaultTTL: 86400
+          MaxTTL: 31536000
+          MinTTL: 0
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendS3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+        PriceClass: PriceClass_100
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+        Logging:
+          Bucket: !GetAtt CloudFrontLogsBucket.DomainName
+          IncludeCookies: false
+          Prefix: cloudfront-logs/
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # CloudFront ログ用 S3 バケット
+  CloudFrontLogsBucket:
+    Type: AWS::S3::Bucket
+    Condition: EnableCloudFront
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-cloudfront-logs-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3 ログ グループ
+  S3LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/s3/${ProjectName}-${Environment}-frontend"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-s3-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # デプロイメント用 IAM ロール
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-deployment-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3DeploymentAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "${FrontendS3Bucket}/*"
+                  - !GetAtt FrontendS3Bucket.Arn
+        - PolicyName: CloudFrontInvalidation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                Resource: !If
+                  - EnableCloudFront
+                  - !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+                  - !Ref "AWS::NoValue"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-deployment-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  FrontendS3BucketName:
+    Description: フロントエンド S3 バケット名
+    Value: !Ref FrontendS3Bucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-bucket-name"
+
+  FrontendS3BucketWebsiteURL:
+    Description: S3 バケット ウェブサイト URL
+    Value: !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-s3-url"
+
+  CloudFrontDistributionId:
+    Condition: EnableCloudFront
+    Description: CloudFront ディストリビューション ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-distribution-id"
+
+  CloudFrontDistributionDomainName:
+    Condition: EnableCloudFront
+    Description: CloudFront ディストリビューション ドメイン名
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-domain-name"
+
+  CloudFrontDistributionURL:
+    Condition: EnableCloudFront
+    Description: CloudFront ディストリビューション URL
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-url"
+
+  FrontendURL:
+    Description: フロントエンド URL
+    Value: !If
+      - EnableCloudFront
+      - !Sub "https://${CloudFrontDistribution.DomainName}"
+      - !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-url"
+
+  DeploymentRoleArn:
+    Description: デプロイメント用 IAM ロール ARN
+    Value: !GetAtt DeploymentRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-deployment-role-arn"

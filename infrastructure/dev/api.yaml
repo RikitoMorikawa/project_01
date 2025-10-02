@@ -1,0 +1,294 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Development Environment API Gateway and Lambda"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: dev
+    Description: 環境名
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 128
+    Description: Lambda メモリサイズ (MB)
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: Lambda コードが格納されている S3 バケット名
+
+  LambdaCodeS3Key:
+    Type: String
+    Default: lambda-deployment-package.zip
+    Description: Lambda デプロイメントパッケージの S3 キー
+
+Resources:
+  # Lambda 実行ロール
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-lambda-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DatabaseAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                Resource: "*"
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref DatabaseSecret
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-execution-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # データベース認証情報用 Secrets Manager
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-db-credentials"
+      Description: !Sub "${ProjectName} ${Environment} database credentials"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-credentials"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda 関数
+  ApiLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-api"
+      Runtime: python3.11
+      Handler: lambda_handler.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: 30
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-lambda-sg-id"
+        SubnetIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-private-subnet-1-id"
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-private-subnet-2-id"
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DATABASE_HOST:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-cluster-endpoint"
+          DATABASE_PORT:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-port"
+          DATABASE_NAME:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-name"
+          DATABASE_SECRET_ARN: !Ref DatabaseSecret
+          PYTHONPATH: /var/runtime
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Lambda ログ グループ
+  ApiLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-api"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway REST API
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-api"
+      Description: !Sub "${ProjectName} ${Environment} REST API"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Policy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: execute-api:Invoke
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway デプロイメント
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayProxyMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: v1
+      StageDescription: !Sub "${ProjectName} ${Environment} API v1 stage"
+
+  # API Gateway ステージ
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: v1
+      Description: !Sub "${ProjectName} ${Environment} API v1 stage"
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-stage"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway プロキシリソース
+  ApiGatewayProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "{proxy+}"
+
+  # API Gateway プロキシメソッド
+  ApiGatewayProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}/invocations"
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+
+  # Lambda 実行権限（API Gateway用）
+  ApiGatewayLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*"
+
+  # CloudWatch API Gateway ログ グループ
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "API-Gateway-Execution-Logs_${ApiGateway}/v1"
+      RetentionInDays: 14
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-gateway-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway アカウント設定
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  # API Gateway CloudWatch ロール
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-api-gateway-cloudwatch-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-gateway-cloudwatch-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  ApiGatewayId:
+    Description: API Gateway ID
+    Value: !Ref ApiGateway
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-gateway-id"
+
+  ApiGatewayUrl:
+    Description: API Gateway URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/v1"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-gateway-url"
+
+  LambdaFunctionArn:
+    Description: Lambda 関数 ARN
+    Value: !GetAtt ApiLambdaFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-function-arn"
+
+  LambdaFunctionName:
+    Description: Lambda 関数名
+    Value: !Ref ApiLambdaFunction
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-function-name"
+
+  DatabaseSecretArn:
+    Description: データベース認証情報 Secret ARN
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-db-secret-arn"

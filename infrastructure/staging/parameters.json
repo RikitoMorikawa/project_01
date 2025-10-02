@@ -5,6 +5,11 @@
   "LambdaMemorySize": 512,
   "LambdaProvisionedConcurrency": 0,
   "CloudFrontEnabled": true,
-  "WAFEnabled": false,
-  "DatabaseName": "csr_lambda_staging"
+  "WAFEnabled": true,
+  "DatabaseName": "csr_lambda_staging",
+  "VpcCidr": "10.1.0.0/16",
+  "PublicSubnet1Cidr": "10.1.1.0/24",
+  "PublicSubnet2Cidr": "10.1.2.0/24",
+  "PrivateSubnet1Cidr": "10.1.3.0/24",
+  "PrivateSubnet2Cidr": "10.1.4.0/24"
 }

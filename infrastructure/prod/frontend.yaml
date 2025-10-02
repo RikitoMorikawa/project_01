@@ -1,0 +1,734 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Production Environment S3 and CloudFront for Frontend"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: 環境名
+
+  CloudFrontEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: CloudFront を有効にするかどうか
+
+  WAFEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: WAF を有効にするかどうか
+
+Conditions:
+  EnableCloudFront: !Equals [!Ref CloudFrontEnabled, "true"]
+  EnableWAF: !And [!Condition EnableCloudFront, !Equals [!Ref WAFEnabled, "true"]]
+
+Resources:
+  # S3 バケット（静的ウェブサイトホスティング用）
+  FrontendS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 90
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+          - Id: TransitionToIA
+            Status: Enabled
+            TransitionInDays: 30
+            StorageClass: STANDARD_IA
+          - Id: TransitionToGlacier
+            Status: Enabled
+            TransitionInDays: 90
+            StorageClass: GLACIER
+      NotificationConfiguration:
+        CloudWatchConfigurations:
+          - Event: s3:ObjectCreated:*
+            CloudWatchConfiguration:
+              LogGroupName: !Ref S3LogGroup
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # S3 バケットポリシー
+  FrontendS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendS3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudFrontOriginAccessIdentity
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}"
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendS3Bucket}/*"
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !Sub "${FrontendS3Bucket}/*"
+              - !GetAtt FrontendS3Bucket.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # CloudFront Origin Access Identity
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Condition: EnableCloudFront
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "${ProjectName} ${Environment} OAI"
+
+  # CloudFront ディストリビューション
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: EnableCloudFront
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${ProjectName} ${Environment} CloudFront Distribution"
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+            Headers:
+              - Origin
+              - Access-Control-Request-Headers
+              - Access-Control-Request-Method
+          DefaultTTL: 86400
+          MaxTTL: 31536000
+          MinTTL: 0
+          ResponseHeadersPolicy: !Ref CloudFrontResponseHeadersPolicy
+        CacheBehaviors:
+          - PathPattern: "/static/*"
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+            DefaultTTL: 31536000 # 1 year for static assets
+            MaxTTL: 31536000
+            MinTTL: 31536000
+            ResponseHeadersPolicy: !Ref CloudFrontResponseHeadersPolicy
+          - PathPattern: "/api/*"
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: all
+              Headers:
+                - "*"
+            DefaultTTL: 0
+            MaxTTL: 0
+            MinTTL: 0
+            OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf # CORS-S3Origin
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendS3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+          - Id: ApiOrigin
+            DomainName: !Sub
+              - "${ApiId}.execute-api.${AWS::Region}.amazonaws.com"
+              - ApiId:
+                  Fn::ImportValue: !Sub "${ProjectName}-${Environment}-api-gateway-id"
+            OriginPath: "/v1"
+            CustomOriginConfig:
+              HTTPPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        PriceClass: PriceClass_All
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+        Logging:
+          Bucket: !GetAtt CloudFrontLogsBucket.DomainName
+          IncludeCookies: false
+          Prefix: cloudfront-logs/
+        WebACLId: !If [EnableWAF, !GetAtt CloudFrontWebACL.Arn, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # CloudFront レスポンスヘッダーポリシー
+  CloudFrontResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Condition: EnableCloudFront
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${ProjectName}-${Environment}-security-headers"
+        Comment: Security headers for production environment
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: false
+          ContentTypeOptions:
+            Override: false
+          FrameOptions:
+            FrameOption: DENY
+            Override: false
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: false
+        CustomHeadersConfig:
+          Items:
+            - Header: X-Content-Security-Policy
+              Value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
+              Override: false
+            - Header: Permissions-Policy
+              Value: "geolocation=(), microphone=(), camera=()"
+              Override: false
+
+  # CloudFront ログ用 S3 バケット
+  CloudFrontLogsBucket:
+    Type: AWS::S3::Bucket
+    Condition: EnableCloudFront
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-cloudfront-logs-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 365
+          - Id: TransitionToIA
+            Status: Enabled
+            TransitionInDays: 30
+            StorageClass: STANDARD_IA
+          - Id: TransitionToGlacier
+            Status: Enabled
+            TransitionInDays: 90
+            StorageClass: GLACIER
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # WAF Web ACL（本番環境用の強化されたセキュリティルール）
+  CloudFrontWebACL:
+    Type: AWS::WAFv2::WebACL
+    Condition: EnableWAF
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-waf"
+      Description: !Sub "Enhanced WAF for ${ProjectName} ${Environment} CloudFront"
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      Rules:
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              ExcludedRules:
+                - Name: SizeRestrictions_BODY
+                - Name: GenericRFI_BODY
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSetMetric
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputsRuleSetMetric
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AmazonIpReputationListMetric
+        - Name: AWSManagedRulesLinuxRuleSet
+          Priority: 4
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesLinuxRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: LinuxRuleSetMetric
+        - Name: RateLimitRule
+          Priority: 5
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 5000
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRuleMetric
+        - Name: GeoBlockRule
+          Priority: 6
+          Action:
+            Block: {}
+          Statement:
+            GeoMatchStatement:
+              CountryCodes:
+                - CN
+                - RU
+                - KP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: GeoBlockRuleMetric
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${ProjectName}${Environment}WebACL"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-waf"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # WAF ログ設定
+  WAFLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableWAF
+    Properties:
+      LogGroupName: !Sub "/aws/wafv2/${ProjectName}-${Environment}"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-waf-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  WAFLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Condition: EnableWAF
+    Properties:
+      ResourceArn: !GetAtt CloudFrontWebACL.Arn
+      LogDestinationConfigs:
+        - !Sub "${WAFLogGroup.Arn}:*"
+      RedactedFields:
+        - SingleHeader:
+            Name: authorization
+        - SingleHeader:
+            Name: cookie
+
+  # S3 ログ グループ
+  S3LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/s3/${ProjectName}-${Environment}-frontend"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-s3-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # デプロイメント用 IAM ロール
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-deployment-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3DeploymentAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketVersioning
+                  - s3:PutBucketVersioning
+                Resource:
+                  - !Sub "${FrontendS3Bucket}/*"
+                  - !GetAtt FrontendS3Bucket.Arn
+        - PolicyName: CloudFrontInvalidation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                  - cloudfront:ListInvalidations
+                  - cloudfront:GetDistribution
+                Resource: !If
+                  - EnableCloudFront
+                  - !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+                  - !Ref "AWS::NoValue"
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+        - PolicyName: KMSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource:
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-deployment-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudFront アラーム（本番環境用の詳細監視）
+  CloudFrontErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableCloudFront
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudfront-error-rate"
+      AlarmDescription: CloudFront error rate is too high
+      MetricName: 4xxErrorRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 2
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref CloudFrontDistribution
+      AlarmActions:
+        - !Ref FrontendAlarmTopic
+
+  CloudFront5xxErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableCloudFront
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudfront-5xx-errors"
+      AlarmDescription: CloudFront 5xx error rate is too high
+      MetricName: 5xxErrorRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref CloudFrontDistribution
+      AlarmActions:
+        - !Ref FrontendCriticalAlarmTopic
+
+  CloudFrontOriginLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableCloudFront
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudfront-origin-latency"
+      AlarmDescription: CloudFront origin latency is too high
+      MetricName: OriginLatency
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 3000 # 3 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref CloudFrontDistribution
+      AlarmActions:
+        - !Ref FrontendAlarmTopic
+
+  # WAF アラーム
+  WAFBlockedRequestsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableWAF
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-waf-blocked-requests"
+      AlarmDescription: WAF blocked requests count is high
+      MetricName: BlockedRequests
+      Namespace: AWS/WAFV2
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: WebACL
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-waf"
+        - Name: Region
+          Value: CloudFront
+        - Name: Rule
+          Value: ALL
+      AlarmActions:
+        - !Ref FrontendAlarmTopic
+
+  # SNS トピック（通常のアラーム通知用）
+  FrontendAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-frontend-alarms"
+      DisplayName: !Sub "${ProjectName} ${Environment} Frontend Alarms"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend-alarms"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SNS トピック（クリティカルアラーム通知用）
+  FrontendCriticalAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-frontend-critical-alarms"
+      DisplayName: !Sub "${ProjectName} ${Environment} Frontend Critical Alarms"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend-critical-alarms"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # フロントエンドダッシュボード
+  FrontendDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: EnableCloudFront
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-frontend-dashboard"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/CloudFront", "Requests", "DistributionId", "${CloudFrontDistribution}" ],
+                  [ ".", "BytesDownloaded", ".", "." ],
+                  [ ".", "4xxErrorRate", ".", "." ],
+                  [ ".", "5xxErrorRate", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "us-east-1",
+                "title": "CloudFront Performance Metrics"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/WAFV2", "AllowedRequests", "WebACL", "${ProjectName}-${Environment}-cloudfront-waf", "Region", "CloudFront", "Rule", "ALL" ],
+                  [ ".", "BlockedRequests", ".", ".", ".", ".", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "us-east-1",
+                "title": "WAF Security Metrics"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  FrontendS3BucketName:
+    Description: フロントエンド S3 バケット名
+    Value: !Ref FrontendS3Bucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-bucket-name"
+
+  FrontendS3BucketWebsiteURL:
+    Description: S3 バケット ウェブサイト URL
+    Value: !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-s3-url"
+
+  CloudFrontDistributionId:
+    Condition: EnableCloudFront
+    Description: CloudFront ディストリビューション ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-distribution-id"
+
+  CloudFrontDistributionDomainName:
+    Condition: EnableCloudFront
+    Description: CloudFront ディストリビューション ドメイン名
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-domain-name"
+
+  CloudFrontDistributionURL:
+    Condition: EnableCloudFront
+    Description: CloudFront ディストリビューション URL
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-url"
+
+  FrontendURL:
+    Description: フロントエンド URL
+    Value: !If
+      - EnableCloudFront
+      - !Sub "https://${CloudFrontDistribution.DomainName}"
+      - !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-url"
+
+  DeploymentRoleArn:
+    Description: デプロイメント用 IAM ロール ARN
+    Value: !GetAtt DeploymentRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-deployment-role-arn"
+
+  WebACLArn:
+    Condition: EnableWAF
+    Description: WAF Web ACL ARN
+    Value: !GetAtt CloudFrontWebACL.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-waf-web-acl-arn"
+
+  FrontendAlarmTopicArn:
+    Description: フロントエンドアラーム SNS トピック ARN
+    Value: !Ref FrontendAlarmTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-alarm-topic-arn"
+
+  FrontendCriticalAlarmTopicArn:
+    Description: フロントエンドクリティカルアラーム SNS トピック ARN
+    Value: !Ref FrontendCriticalAlarmTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-critical-alarm-topic-arn"

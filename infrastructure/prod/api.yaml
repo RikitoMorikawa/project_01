@@ -1,0 +1,670 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Production Environment API Gateway and Lambda"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: 環境名
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 1024
+    Description: Lambda メモリサイズ (MB)
+
+  LambdaProvisionedConcurrency:
+    Type: Number
+    Default: 10
+    Description: Lambda Provisioned Concurrency
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: Lambda コードが格納されている S3 バケット名
+
+  LambdaCodeS3Key:
+    Type: String
+    Default: lambda-deployment-package.zip
+    Description: Lambda デプロイメントパッケージの S3 キー
+
+Conditions:
+  EnableProvisionedConcurrency: !Not [!Equals [!Ref LambdaProvisionedConcurrency, 0]]
+
+Resources:
+  # Lambda 実行ロール
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-lambda-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: DatabaseAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                Resource: "*"
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref DatabaseSecret
+        - PolicyName: CloudWatchMetrics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+        - PolicyName: ParameterStoreAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/*"
+        - PolicyName: KMSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource:
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-database-kms-key-id"
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-execution-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # データベース認証情報用 Secrets Manager
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-db-credentials"
+      Description: !Sub "${ProjectName} ${Environment} database credentials"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-database-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-credentials"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda 関数
+  ApiLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-api"
+      Runtime: python3.11
+      Handler: lambda_handler.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: 30
+      ReservedConcurrencyLimit: 500
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-lambda-sg-id"
+        SubnetIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-private-subnet-1-id"
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-private-subnet-2-id"
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DATABASE_HOST:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-cluster-endpoint"
+          DATABASE_READ_HOST:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-cluster-read-endpoint"
+          DATABASE_PORT:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-port"
+          DATABASE_NAME:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-name"
+          DATABASE_SECRET_ARN: !Ref DatabaseSecret
+          PYTHONPATH: /var/runtime
+          LOG_LEVEL: INFO
+          CORS_ORIGINS: "*"
+          AWS_XRAY_TRACING_NAME: !Sub "${ProjectName}-${Environment}-api"
+          CONNECTION_POOL_SIZE: "20"
+          CONNECTION_POOL_MAX_OVERFLOW: "30"
+      TracingConfig:
+        Mode: Active
+      DeadLetterConfig:
+        TargetArn: !GetAtt LambdaDeadLetterQueue.Arn
+      KMSKeyArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # Lambda バージョン
+  ApiLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref ApiLambdaFunction
+      Description: !Sub "Version for ${Environment} environment"
+
+  # Lambda エイリアス
+  ApiLambdaAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref ApiLambdaFunction
+      FunctionVersion: !GetAtt ApiLambdaVersion.Version
+      Name: !Ref Environment
+      Description: !Sub "Alias for ${Environment} environment"
+
+  # Lambda Provisioned Concurrency
+  LambdaProvisionedConcurrencyConfig:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Condition: EnableProvisionedConcurrency
+    Properties:
+      FunctionName: !Ref ApiLambdaFunction
+      Qualifier: !Ref ApiLambdaAlias
+      ProvisionedConcurrencyLimit: !Ref LambdaProvisionedConcurrency
+
+  # Lambda Dead Letter Queue
+  LambdaDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-lambda-dlq"
+      MessageRetentionPeriod: 1209600 # 14 days
+      KmsMasterKeyId: alias/aws/sqs
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-dlq"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda ログ グループ
+  ApiLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-api"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway REST API
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-api"
+      Description: !Sub "${ProjectName} ${Environment} REST API"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Policy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: execute-api:Invoke
+            Resource: "*"
+            Condition:
+              IpAddress:
+                aws:SourceIp:
+                  - 0.0.0.0/0 # 本番環境では適切な IP 制限を設定
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway リクエストバリデーター
+  ApiGatewayRequestValidator:
+    Type: AWS::ApiGateway::RequestValidator
+    Properties:
+      RestApiId: !Ref ApiGateway
+      Name: !Sub "${ProjectName}-${Environment}-request-validator"
+      ValidateRequestBody: true
+      ValidateRequestParameters: true
+
+  # API Gateway 使用量プラン
+  ApiGatewayUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      UsagePlanName: !Sub "${ProjectName}-${Environment}-usage-plan"
+      Description: !Sub "${ProjectName} ${Environment} API usage plan"
+      ApiStages:
+        - ApiId: !Ref ApiGateway
+          Stage: v1
+      Throttle:
+        BurstLimit: 1000
+        RateLimit: 500
+      Quota:
+        Limit: 1000000
+        Period: DAY
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-usage-plan"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway デプロイメント
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayProxyMethod
+      - ApiGatewayRootMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref Environment
+      StageDescription: !Sub "${ProjectName} ${Environment} API stage"
+
+  # API Gateway ステージ
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: v1
+      Description: !Sub "${ProjectName} ${Environment} API v1 stage"
+      Variables:
+        environment: !Ref Environment
+        lambdaAlias: !Ref Environment
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: false # 本番環境では無効化
+          MetricsEnabled: true
+          ThrottlingBurstLimit: 1000
+          ThrottlingRateLimit: 500
+          CachingEnabled: true
+          CacheTtlInSeconds: 300
+          CacheKeyParameters:
+            - method.request.header.Authorization
+      TracingEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-stage"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway ルートメソッド
+  ApiGatewayRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !GetAtt ApiGateway.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${ApiLambdaAlias}/invocations"
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+
+  # API Gateway プロキシリソース
+  ApiGatewayProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: "{proxy+}"
+
+  # API Gateway プロキシメソッド
+  ApiGatewayProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      RequestValidatorId: !Ref ApiGatewayRequestValidator
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiLambdaFunction.Arn}:${ApiLambdaAlias}/invocations"
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+
+  # Lambda 実行権限（API Gateway用）
+  ApiGatewayLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Sub "${ApiLambdaFunction}:${ApiLambdaAlias}"
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*"
+
+  # CloudWatch API Gateway ログ グループ
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "API-Gateway-Execution-Logs_${ApiGateway}/v1"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-gateway-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway アカウント設定
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  # API Gateway CloudWatch ロール
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-api-gateway-cloudwatch-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-gateway-cloudwatch-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda アラーム（本番環境用の厳格な監視）
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-errors"
+      AlarmDescription: Lambda function error rate is too high
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 3
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiLambdaFunction
+      AlarmActions:
+        - !Ref ApiCriticalAlarmTopic
+      OKActions:
+        - !Ref ApiAlarmTopic
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-duration"
+      AlarmDescription: Lambda function duration is too high
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 20000 # 20 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiLambdaFunction
+      AlarmActions:
+        - !Ref ApiAlarmTopic
+
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-throttles"
+      AlarmDescription: Lambda function throttle count is too high
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiLambdaFunction
+      AlarmActions:
+        - !Ref ApiCriticalAlarmTopic
+
+  # API Gateway アラーム
+  ApiGateway4XXAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-4xx-errors"
+      AlarmDescription: API Gateway 4XX error rate is too high
+      MetricName: 4XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Ref ApiGateway
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref ApiAlarmTopic
+
+  ApiGateway5XXAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-5xx-errors"
+      AlarmDescription: API Gateway 5XX error rate is too high
+      MetricName: 5XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Ref ApiGateway
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref ApiCriticalAlarmTopic
+
+  ApiGatewayLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-latency-high"
+      AlarmDescription: API Gateway latency is too high
+      MetricName: Latency
+      Namespace: AWS/ApiGateway
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 5000 # 5 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Ref ApiGateway
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref ApiAlarmTopic
+
+  # SNS トピック（通常のアラーム通知用）
+  ApiAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-api-alarms"
+      DisplayName: !Sub "${ProjectName} ${Environment} API Alarms"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-alarms"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SNS トピック（クリティカルアラーム通知用）
+  ApiCriticalAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-api-critical-alarms"
+      DisplayName: !Sub "${ProjectName} ${Environment} API Critical Alarms"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-critical-alarms"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API ダッシュボード
+  ApiDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-api-dashboard"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${ApiLambdaFunction}" ],
+                  [ ".", "Errors", ".", "." ],
+                  [ ".", "Invocations", ".", "." ],
+                  [ ".", "Throttles", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Lambda Performance Metrics"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "Count", "ApiName", "${ApiGateway}", "Stage", "v1" ],
+                  [ ".", "4XXError", ".", ".", ".", "." ],
+                  [ ".", "5XXError", ".", ".", ".", "." ],
+                  [ ".", "Latency", ".", ".", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "API Gateway Metrics"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  ApiGatewayId:
+    Description: API Gateway ID
+    Value: !Ref ApiGateway
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-gateway-id"
+
+  ApiGatewayUrl:
+    Description: API Gateway URL
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/v1"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-gateway-url"
+
+  LambdaFunctionArn:
+    Description: Lambda 関数 ARN
+    Value: !GetAtt ApiLambdaFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-function-arn"
+
+  LambdaFunctionName:
+    Description: Lambda 関数名
+    Value: !Ref ApiLambdaFunction
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-function-name"
+
+  LambdaAliasArn:
+    Description: Lambda エイリアス ARN
+    Value: !Ref ApiLambdaAlias
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-alias-arn"
+
+  DatabaseSecretArn:
+    Description: データベース認証情報 Secret ARN
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-db-secret-arn"
+
+  ApiAlarmTopicArn:
+    Description: API アラーム SNS トピック ARN
+    Value: !Ref ApiAlarmTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-alarm-topic-arn"
+
+  ApiCriticalAlarmTopicArn:
+    Description: API クリティカルアラーム SNS トピック ARN
+    Value: !Ref ApiCriticalAlarmTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-critical-alarm-topic-arn"
+
+  ApiUsagePlanId:
+    Description: API Gateway 使用量プラン ID
+    Value: !Ref ApiGatewayUsagePlan
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-usage-plan-id"
