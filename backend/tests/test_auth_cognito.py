@@ -139,7 +139,8 @@ class TestCognitoTokenVerifier:
             with pytest.raises(AuthenticationError) as exc_info:
                 verifier.verify_token("id-token")
             
-            assert "Invalid token type" in str(exc_info.value)
+            # エラーメッセージは一般化されるため、例外が発生することを確認
+            assert exc_info.value.status_code == 401
     
     def test_get_user_info_success(self):
         """ユーザー情報取得成功のテスト / Test successful get user info"""
@@ -396,9 +397,10 @@ class TestCognitoIntegration:
             assert token_claims['username'] == 'testuser'
             
             # ユーザー情報抽出 / Extract user info
-            user_info = get_user_from_token("valid-jwt-token")
-            assert user_info['cognito_user_id'] == mock_cognito_token_claims['sub']
-            assert user_info['username'] == mock_cognito_token_claims['username']
+            with patch('app.auth.cognito.cognito_verifier', verifier):
+                user_info = get_user_from_token("valid-jwt-token")
+                assert user_info['cognito_user_id'] == mock_cognito_token_claims['sub']
+                assert user_info['username'] == mock_cognito_token_claims['username']
     
     def test_token_refresh_flow(self):
         """トークン更新フローのテスト / Test token refresh flow"""

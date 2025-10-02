@@ -40,7 +40,7 @@ def test_imports():
         print("✓ Routers imported successfully")
         
         print("\n✅ All imports successful! FastAPI structure is correct.")
-        return True
+        assert True
         
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -71,7 +71,7 @@ def test_app_structure():
                 print(f"⚠ Route not found: {expected}")
         
         print(f"\n✅ App structure verified! Found {len(routes)} routes total.")
-        return True
+        assert True
         
     except Exception as e:
         print(f"❌ App structure test failed: {e}")
