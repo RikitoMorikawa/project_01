@@ -41,11 +41,68 @@ load_parameters() {
     if [[ -f "$param_file" ]]; then
         log_info "パラメータファイルを読み込み中: $param_file"
         # JSONファイルからCloudFormationパラメータ形式に変換
-        jq -r 'to_entries | map("ParameterKey=\(.key),ParameterValue=\(.value)") | join(" ")' "$param_file"
+        local params=$(jq -r 'to_entries | map("ParameterKey=\(.key),ParameterValue=\(.value)") | join(" ")' "$param_file" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$params" && "$params" != "null" ]]; then
+            echo "$params"
+        else
+            log_warning "パラメータファイルの解析に失敗しました: $param_file"
+            echo ""
+        fi
     else
-        log_error "パラメータファイルが見つかりません: $param_file"
-        exit 1
+        log_warning "パラメータファイルが見つかりません: $param_file"
+        echo ""
     fi
+}
+
+# CloudFormationスタックのデプロイ（パラメータなし）
+deploy_stack_no_params() {
+    local stack_name="$1"
+    local template_file="$2"
+    local capabilities="$3"
+    
+    log_info "スタックをデプロイ中: $stack_name"
+    
+    # スタックが存在するかチェック
+    if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" >/dev/null 2>&1; then
+        log_info "既存のスタックを更新中: $stack_name"
+        aws cloudformation update-stack \
+            --stack-name "$stack_name" \
+            --template-body "file://$template_file" \
+            --capabilities $capabilities \
+            --region "$REGION" \
+            --tags Key=Project,Value="$PROJECT_NAME" Key=Environment,Value="$ENVIRONMENT" \
+            || {
+                if [[ $? -eq 255 ]]; then
+                    log_warning "スタックに変更がありません: $stack_name"
+                else
+                    log_error "スタックの更新に失敗しました: $stack_name"
+                    exit 1
+                fi
+            }
+    else
+        log_info "新しいスタックを作成中: $stack_name"
+        aws cloudformation create-stack \
+            --stack-name "$stack_name" \
+            --template-body "file://$template_file" \
+            --capabilities $capabilities \
+            --region "$REGION" \
+            --tags Key=Project,Value="$PROJECT_NAME" Key=Environment,Value="$ENVIRONMENT" \
+            || {
+                log_error "スタックの作成に失敗しました: $stack_name"
+                exit 1
+            }
+    fi
+    
+    # デプロイメント完了を待機
+    log_info "デプロイメント完了を待機中: $stack_name"
+    aws cloudformation wait stack-create-complete --stack-name "$stack_name" --region "$REGION" 2>/dev/null || \
+    aws cloudformation wait stack-update-complete --stack-name "$stack_name" --region "$REGION" || {
+        log_error "スタックのデプロイメントに失敗しました: $stack_name"
+        aws cloudformation describe-stack-events --stack-name "$stack_name" --region "$REGION" --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`]'
+        exit 1
+    }
+    
+    log_success "スタックのデプロイメントが完了しました: $stack_name"
 }
 
 # CloudFormationスタックのデプロイ
@@ -119,13 +176,43 @@ main() {
     fi
     
     # パラメータの読み込み
-    SHARED_PARAMS=$(load_parameters "../shared/parameters.json")
-    DEV_PARAMS=$(load_parameters "parameters.json")
-    ALL_PARAMS="$SHARED_PARAMS $DEV_PARAMS"
+    if [[ -f "../shared/parameters.json" ]]; then
+        SHARED_PARAMS=$(load_parameters "../shared/parameters.json")
+    else
+        SHARED_PARAMS=""
+        log_warning "共有パラメータファイルが見つかりません: ../shared/parameters.json"
+    fi
+    
+    if [[ -f "parameters.json" ]]; then
+        DEV_PARAMS=$(load_parameters "parameters.json")
+    else
+        DEV_PARAMS=""
+        log_warning "開発環境パラメータファイルが見つかりません: parameters.json"
+    fi
+    
+    # パラメータを結合（空でない場合のみ）
+    ALL_PARAMS=""
+    if [[ -n "$SHARED_PARAMS" ]]; then
+        ALL_PARAMS="$SHARED_PARAMS"
+    fi
+    if [[ -n "$DEV_PARAMS" ]]; then
+        if [[ -n "$ALL_PARAMS" ]]; then
+            ALL_PARAMS="$ALL_PARAMS $DEV_PARAMS"
+        else
+            ALL_PARAMS="$DEV_PARAMS"
+        fi
+    fi
     
     # 1. ネットワークインフラストラクチャのデプロイ
     log_info "--- ステップ 1: ネットワークインフラストラクチャ ---"
-    deploy_stack "${STACK_PREFIX}-network" "main.yaml" "$ALL_PARAMS" "CAPABILITY_NAMED_IAM"
+    
+    # パラメータが空の場合はパラメータなしでデプロイ
+    if [[ -n "$ALL_PARAMS" ]]; then
+        deploy_stack "${STACK_PREFIX}-network" "main.yaml" "$ALL_PARAMS" "CAPABILITY_NAMED_IAM"
+    else
+        log_info "パラメータなしでスタックをデプロイします"
+        deploy_stack_no_params "${STACK_PREFIX}-network" "main.yaml" "CAPABILITY_NAMED_IAM"
+    fi
     
     # 2. データベースのデプロイ
     log_info "--- ステップ 2: データベースインフラストラクチャ ---"

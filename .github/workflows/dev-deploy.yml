@@ -165,8 +165,16 @@ jobs:
         run: |
           echo "=== インフラストラクチャデプロイ開始 ==="
           cd infrastructure/dev
-          chmod +x deploy.sh
-          ./deploy.sh
+
+          # シンプルなデプロイスクリプトを試行
+          if [ -f "simple-deploy.sh" ]; then
+            chmod +x simple-deploy.sh
+            ./simple-deploy.sh
+          else
+            # 元のスクリプトにフォールバック
+            chmod +x deploy.sh
+            ./deploy.sh
+          fi
 
       - name: バックエンドをビルド
         run: |
