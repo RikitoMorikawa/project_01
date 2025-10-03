@@ -311,12 +311,21 @@ jobs:
         run: |
           echo "=== ステージングフロントエンドデプロイ開始 ==="
 
-          # S3バケット名を取得
+          # S3バケット名を取得（ステージング環境は単一スタック）
           FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-frontend" \
+            --stack-name "${STACK_PREFIX}-main" \
             --region "$AWS_REGION" \
             --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketName`].OutputValue' \
             --output text 2>/dev/null || echo "")
+
+          # フォールバック：別のスタック名も試行
+          if [[ -z "$FRONTEND_BUCKET" || "$FRONTEND_BUCKET" == "None" ]]; then
+            FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+              --stack-name "${STACK_PREFIX}-frontend" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketName`].OutputValue' \
+              --output text 2>/dev/null || echo "")
+          fi
 
           if [[ -n "$FRONTEND_BUCKET" ]]; then
             echo "フロントエンドファイルを S3 にアップロード中: $FRONTEND_BUCKET"
