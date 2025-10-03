@@ -236,6 +236,55 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable1
       SubnetId: !Ref PrivateSubnet2
 
+  # フロントエンド用S3バケット
+  FrontendS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # S3バケットポリシー（パブリック読み取り許可）
+  FrontendS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendS3Bucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendS3Bucket}/*"
+
+  # Lambda用S3バケット
+  LambdaDeploymentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-lambda-deployments-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-deployments"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
 Outputs:
   VPCId:
     Description: VPC ID
@@ -266,3 +315,21 @@ Outputs:
     Value: !Ref PrivateSubnet2
     Export:
       Name: !Sub "${ProjectName}-${Environment}-private-subnet-2-id"
+
+  FrontendS3BucketName:
+    Description: フロントエンド用S3バケット名
+    Value: !Ref FrontendS3Bucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-bucket-name"
+
+  FrontendS3BucketWebsiteURL:
+    Description: フロントエンド用S3バケットWebサイトURL
+    Value: !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-website-url"
+
+  LambdaDeploymentBucketName:
+    Description: Lambda デプロイメント用S3バケット名
+    Value: !Ref LambdaDeploymentBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-deployment-bucket-name"
