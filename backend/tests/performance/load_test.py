@@ -315,7 +315,8 @@ class LoadTester:
         if results['errors']:
             print(f"\n=== エラー詳細 (最初の10件) ===")
             for error in results['errors'][:10]:
-                print(f"  {error['method']} {error['endpoint']}: {error['error'] or f'HTTP {error['status_code']}'}")
+                error_msg = error['error'] or f"HTTP {error['status_code']}"
+                print(f"  {error['method']} {error['endpoint']}: {error_msg}")
         
         print(f"\n詳細レポートは {output_file} に保存されました。")
 
