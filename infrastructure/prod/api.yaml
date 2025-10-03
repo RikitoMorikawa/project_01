@@ -341,6 +341,14 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # API Gateway と WAF の関連付け
+  ApiGatewayWebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${ApiGateway}/stages/v1"
+      WebACLArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-api-waf-web-acl-arn"
+
   # API Gateway ルートメソッド
   ApiGatewayRootMethod:
     Type: AWS::ApiGateway::Method

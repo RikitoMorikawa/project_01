@@ -1,0 +1,377 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Production Environment WAF for API Gateway"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: 環境名
+
+  WAFEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: WAF を有効にするかどうか
+
+  RateLimitPerIP:
+    Type: Number
+    Default: 2000
+    Description: IP あたりのレート制限（5分間）
+
+  AllowedCountries:
+    Type: CommaDelimitedList
+    Default: "JP,US"
+    Description: 許可する国コード（カンマ区切り）
+
+Conditions:
+  EnableWAF: !Equals [!Ref WAFEnabled, "true"]
+
+Resources:
+  # API Gateway 用 WAF Web ACL
+  ApiGatewayWebACL:
+    Type: AWS::WAFv2::WebACL
+    Condition: EnableWAF
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-api-waf"
+      Description: !Sub "Enhanced WAF for ${ProjectName} ${Environment} API Gateway"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # 1. AWS マネージドルール - 共通攻撃パターン
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              ExcludedRules:
+                - Name: SizeRestrictions_BODY # API で大きなペイロードを許可
+                - Name: GenericRFI_BODY
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSetMetric
+
+        # 2. AWS マネージドルール - 既知の悪意のある入力
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputsRuleSetMetric
+
+        # 3. AWS マネージドルール - IP レピュテーション
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AmazonIpReputationListMetric
+
+        # 4. AWS マネージドルール - SQL インジェクション
+        - Name: AWSManagedRulesSQLiRuleSet
+          Priority: 4
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SQLiRuleSetMetric
+
+        # 5. レート制限ルール（IP ベース）
+        - Name: RateLimitRule
+          Priority: 5
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitPerIP
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRuleMetric
+
+        # 6. 地理的制限ルール（許可された国以外をブロック）
+        - Name: GeoAllowRule
+          Priority: 6
+          Action:
+            Block: {}
+          Statement:
+            NotStatement:
+              Statement:
+                GeoMatchStatement:
+                  CountryCodes: !Ref AllowedCountries
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: GeoAllowRuleMetric
+
+        # 7. カスタムルール - 疑わしいユーザーエージェント
+        - Name: SuspiciousUserAgentRule
+          Priority: 7
+          Action:
+            Block: {}
+          Statement:
+            ByteMatchStatement:
+              SearchString: "bot"
+              FieldToMatch:
+                SingleHeader:
+                  Name: user-agent
+              TextTransformations:
+                - Priority: 0
+                  Type: LOWERCASE
+              PositionalConstraint: CONTAINS
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SuspiciousUserAgentRuleMetric
+
+        # 8. カスタムルール - 大量のヘッダー攻撃
+        - Name: LargeHeaderRule
+          Priority: 8
+          Action:
+            Block: {}
+          Statement:
+            SizeConstraintStatement:
+              FieldToMatch:
+                AllQueryArguments: {}
+              ComparisonOperator: GT
+              Size: 8192
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: LargeHeaderRuleMetric
+
+        # 9. カスタムルール - 認証エンドポイントの追加保護
+        - Name: AuthEndpointProtection
+          Priority: 9
+          Action:
+            Block: {}
+          Statement:
+            AndStatement:
+              Statements:
+                - ByteMatchStatement:
+                    SearchString: "/api/v1/auth/"
+                    FieldToMatch:
+                      UriPath: {}
+                    TextTransformations:
+                      - Priority: 0
+                        Type: LOWERCASE
+                    PositionalConstraint: STARTS_WITH
+                - RateBasedStatement:
+                    Limit: 100 # 認証エンドポイントは厳格な制限
+                    AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AuthEndpointProtectionMetric
+
+        # 10. カスタムルール - 管理エンドポイントの保護
+        - Name: AdminEndpointProtection
+          Priority: 10
+          Action:
+            Block: {}
+          Statement:
+            AndStatement:
+              Statements:
+                - ByteMatchStatement:
+                    SearchString: "/api/v1/admin/"
+                    FieldToMatch:
+                      UriPath: {}
+                    TextTransformations:
+                      - Priority: 0
+                        Type: LOWERCASE
+                    PositionalConstraint: STARTS_WITH
+                - NotStatement:
+                    Statement:
+                      IPSetReferenceStatement:
+                        Arn: !GetAtt AdminIPSet.Arn
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AdminEndpointProtectionMetric
+
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${ProjectName}${Environment}ApiWebACL"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-waf"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # 管理者 IP セット
+  AdminIPSet:
+    Type: AWS::WAFv2::IPSet
+    Condition: EnableWAF
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-admin-ip-set"
+      Description: "管理者アクセス許可 IP アドレス"
+      Scope: REGIONAL
+      IPAddressVersion: IPV4
+      Addresses:
+        - "203.0.113.0/24" # 例: 管理者オフィスの IP レンジ
+        - "198.51.100.0/24" # 例: VPN の IP レンジ
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-admin-ip-set"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # WAF ログ設定
+  WAFApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableWAF
+    Properties:
+      LogGroupName: !Sub "/aws/wafv2/api/${ProjectName}-${Environment}"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-waf-api-logs"
+        - Key: Environment
+          Value: !Ref Environment
+
+  WAFApiLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Condition: EnableWAF
+    Properties:
+      ResourceArn: !GetAtt ApiGatewayWebACL.Arn
+      LogDestinationConfigs:
+        - !Sub "${WAFApiLogGroup.Arn}:*"
+      RedactedFields:
+        - SingleHeader:
+            Name: authorization
+        - SingleHeader:
+            Name: cookie
+        - SingleHeader:
+            Name: x-api-key
+
+  # WAF アラーム設定
+  WAFBlockedRequestsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableWAF
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-waf-api-blocked-requests"
+      AlarmDescription: "API Gateway WAF でブロックされたリクエスト数が多い"
+      MetricName: BlockedRequests
+      Namespace: AWS/WAFV2
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: WebACL
+          Value: !Sub "${ProjectName}-${Environment}-api-waf"
+        - Name: Region
+          Value: !Ref "AWS::Region"
+        - Name: Rule
+          Value: ALL
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-api-alarm-topic-arn"
+
+  WAFRateLimitAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableWAF
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-waf-api-rate-limit"
+      AlarmDescription: "API Gateway WAF レート制限が頻繁に発動している"
+      MetricName: BlockedRequests
+      Namespace: AWS/WAFV2
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 20
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: WebACL
+          Value: !Sub "${ProjectName}-${Environment}-api-waf"
+        - Name: Region
+          Value: !Ref "AWS::Region"
+        - Name: Rule
+          Value: RateLimitRule
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-api-critical-alarm-topic-arn"
+
+  WAFAuthEndpointAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableWAF
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-waf-auth-endpoint-attacks"
+      AlarmDescription: "認証エンドポイントへの攻撃が検出された"
+      MetricName: BlockedRequests
+      Namespace: AWS/WAFV2
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: WebACL
+          Value: !Sub "${ProjectName}-${Environment}-api-waf"
+        - Name: Region
+          Value: !Ref "AWS::Region"
+        - Name: Rule
+          Value: AuthEndpointProtection
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-api-critical-alarm-topic-arn"
+
+Outputs:
+  ApiWebACLArn:
+    Condition: EnableWAF
+    Description: "API Gateway 用 WAF Web ACL ARN"
+    Value: !GetAtt ApiGatewayWebACL.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-waf-web-acl-arn"
+
+  ApiWebACLId:
+    Condition: EnableWAF
+    Description: "API Gateway 用 WAF Web ACL ID"
+    Value: !Ref ApiGatewayWebACL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-api-waf-web-acl-id"
+
+  AdminIPSetArn:
+    Condition: EnableWAF
+    Description: "管理者 IP セット ARN"
+    Value: !GetAtt AdminIPSet.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-admin-ip-set-arn"
+
+  WAFApiLogGroupName:
+    Condition: EnableWAF
+    Description: "WAF API ログ グループ名"
+    Value: !Ref WAFApiLogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-waf-api-log-group-name"

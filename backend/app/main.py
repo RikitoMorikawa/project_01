@@ -13,6 +13,7 @@ from app.middleware import (
     error_handling_middleware,
     security_headers_middleware
 )
+from app.middleware.security import setup_security_middleware
 from app.utils.metrics import metrics, BusinessMetrics
 from app.utils.notifications import send_business_notification, send_critical_alert
 
@@ -67,6 +68,9 @@ if settings.environment == "prod":
         TrustedHostMiddleware, 
         allowed_hosts=["*.execute-api.ap-northeast-1.amazonaws.com", "*.cloudfront.net"]
     )
+
+# Setup security middleware
+setup_security_middleware(app, settings.environment)
 
 # Add custom middleware (order matters - first added is outermost)
 app.middleware("http")(security_headers_middleware)
