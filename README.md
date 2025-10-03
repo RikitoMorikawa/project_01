@@ -29,6 +29,7 @@ project_01/
 - Node.js 18+
 - Python 3.11+
 - AWS CLI (デプロイ用)
+- GitHub Personal Access Token (CI/CD 用)
 
 ### ローカル開発環境の起動
 
@@ -87,6 +88,52 @@ API ドキュメント: http://localhost:8000/docs
 - CloudFront + WAF
 
 ## デプロイメント
+
+### GitHub Personal Access Token の設定
+
+CI/CD パイプラインを使用する前に、GitHub Personal Access Token を設定する必要があります。
+
+#### 1. GitHub トークンの作成
+
+1. GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. "Generate new token (classic)" をクリック
+3. 以下の権限を選択：
+   - `repo` (Full control of private repositories)
+   - `admin:repo_hook` (Full control of repository hooks)
+4. トークンをコピーして保存
+
+#### 2. AWS Parameter Store への保存
+
+```bash
+# 自動設定スクリプトを使用（推奨）
+./scripts/setup-github-token.sh --token YOUR_GITHUB_TOKEN --env dev
+
+# または手動で設定
+aws ssm put-parameter \
+    --name "/codepipeline/dev/github/token" \
+    --value "YOUR_GITHUB_TOKEN" \
+    --type "SecureString" \
+    --region ap-northeast-1
+```
+
+#### 3. トークンの検証
+
+```bash
+# トークンの有効性を確認
+./scripts/verify-github-token.sh --env dev
+```
+
+#### 4. GitHub 統合の一括デプロイ
+
+```bash
+# トークン設定からパイプライン作成まで一括実行
+./scripts/deploy-github-integration.sh --env dev --token YOUR_GITHUB_TOKEN
+
+# トークンが既に設定済みの場合
+./scripts/deploy-github-integration.sh --env dev --skip-token
+```
+
+詳細な手順は [GitHub Token Setup Guide](docs/github-token-setup.md) を参照してください。
 
 ### 自動デプロイ
 

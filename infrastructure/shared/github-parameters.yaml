@@ -1,0 +1,314 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "GitHub 統合用パラメータとリソース定義"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: プロジェクト名
+    Default: csr-lambda-api
+
+  Environment:
+    Type: String
+    Description: 環境名
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Default: dev
+
+  GitHubOwner:
+    Type: String
+    Description: GitHub リポジトリのオーナー名
+    Default: RikitoMorikawa
+
+  GitHubRepo:
+    Type: String
+    Description: GitHub リポジトリ名
+    Default: project_01
+
+  GitHubBranch:
+    Type: String
+    Description: 監視対象のブランチ名
+    Default: main
+
+  GitHubTokenParameterName:
+    Type: String
+    Description: GitHub Personal Access Token Parameter Store パス
+    Default: /codepipeline/github/token
+
+  ApiGatewayId:
+    Type: String
+    Description: API Gateway ID (オプション)
+    Default: placeholder
+
+  # GitHubToken パラメータは削除（SecureString は直接参照できないため）
+
+Resources:
+  # GitHub Personal Access Token パラメータ参照
+  # 注意: 実際のトークン値は事前に Parameter Store に保存する必要があります
+
+  # CodePipeline 用 GitHub Webhook
+  GitHubWebhook:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-github-webhook"
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: !Ref GitHubToken
+      Filters:
+        - JsonPath: $.ref
+          MatchEquals: !Sub "refs/heads/${GitHubBranch}"
+      RegisterWithThirdParty: true
+      TargetAction: SourceAction
+      TargetPipeline: !Ref CodePipeline
+      TargetPipelineVersion: !GetAtt CodePipeline.Version
+
+  # CodePipeline 定義（基本構造）
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-pipeline"
+      RoleArn: !Sub
+        - "${RoleArn}"
+        - RoleArn: !ImportValue
+            Fn::Sub: "${ProjectName}-${Environment}-codepipeline-role-arn"
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        # ソースステージ
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: "1"
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+                PollForSourceChanges: false # Webhook を使用
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        # ビルドステージ
+        - Name: Build
+          Actions:
+            - Name: BuildFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref FrontendBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: FrontendBuildOutput
+
+            - Name: BuildBackend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref BackendBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BackendBuildOutput
+
+        # デプロイステージ
+        - Name: Deploy
+          Actions:
+            - Name: DeployInfrastructure
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Sub "${ProjectName}-${Environment}-infrastructure"
+                TemplatePath: SourceOutput::infrastructure/main.yaml
+                Capabilities: CAPABILITY_IAM,CAPABILITY_NAMED_IAM
+                RoleArn: !Sub
+                  - "${RoleArn}"
+                  - RoleArn: !ImportValue
+                      Fn::Sub: "${ProjectName}-${Environment}-cloudformation-role-arn"
+                ParameterOverrides: !Sub |
+                  {
+                    "ProjectName": "${ProjectName}",
+                    "Environment": "${Environment}"
+                  }
+              InputArtifacts:
+                - Name: SourceOutput
+
+            - Name: DeployFrontend
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: "1"
+              Configuration:
+                BucketName: !Sub "${ProjectName}-${Environment}-frontend"
+                Extract: true
+              InputArtifacts:
+                - Name: FrontendBuildOutput
+
+            - Name: DeployBackend
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: "1"
+              Configuration:
+                FunctionName: !Sub "${ProjectName}-${Environment}-deploy-lambda"
+              InputArtifacts:
+                - Name: BackendBuildOutput
+
+  # アーティファクト保存用 S3 バケット
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-codepipeline-artifacts"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # フロントエンド用 CodeBuild プロジェクト
+  FrontendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-build"
+      ServiceRole: !Sub
+        - "${RoleArn}"
+        - RoleArn: !ImportValue
+            Fn::Sub: "${ProjectName}-${Environment}-codebuild-role-arn"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: NODE_ENV
+            Value: !Ref Environment
+          - Name: NEXT_PUBLIC_API_URL
+            Value: !Sub "https://${ApiGatewayId}.execute-api.ap-northeast-1.amazonaws.com/v1"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "フロントエンドビルド開始"
+                - cd frontend
+                - npm ci
+            build:
+              commands:
+                - echo "Next.js アプリケーションをビルド中"
+                - npm run build
+                - npm run export
+            post_build:
+              commands:
+                - echo "ビルド完了"
+          artifacts:
+            files:
+              - '**/*'
+            base-directory: frontend/out
+
+  # バックエンド用 CodeBuild プロジェクト
+  BackendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-backend-build"
+      ServiceRole: !Sub
+        - "${RoleArn}"
+        - RoleArn: !ImportValue
+            Fn::Sub: "${ProjectName}-${Environment}-codebuild-role-arn"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "バックエンドビルド開始"
+                - cd backend
+                - pip install -r requirements.txt
+            build:
+              commands:
+                - echo "Lambda デプロイメントパッケージを作成中"
+                - zip -r ../lambda-deployment.zip . -x "tests/*" "__pycache__/*" "*.pyc"
+            post_build:
+              commands:
+                - echo "ビルド完了"
+          artifacts:
+            files:
+              - lambda-deployment.zip
+
+Outputs:
+  CodePipelineName:
+    Description: CodePipeline 名
+    Value: !Ref CodePipeline
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-codepipeline-name"
+
+  CodePipelineArn:
+    Description: CodePipeline ARN
+    Value: !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:pipeline/${CodePipeline}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-codepipeline-arn"
+
+  GitHubWebhookUrl:
+    Description: GitHub Webhook URL
+    Value: !GetAtt GitHubWebhook.Url
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-github-webhook-url"
+
+  ArtifactBucketName:
+    Description: アーティファクト保存用 S3 バケット名
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-artifact-bucket-name"
+
+  FrontendBuildProjectName:
+    Description: フロントエンド CodeBuild プロジェクト名
+    Value: !Ref FrontendBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-build-project-name"
+
+  BackendBuildProjectName:
+    Description: バックエンド CodeBuild プロジェクト名
+    Value: !Ref BackendBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-backend-build-project-name"

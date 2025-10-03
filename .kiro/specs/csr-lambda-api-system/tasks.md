@@ -298,7 +298,7 @@
 ### 外部サービス連携
 
 - [x] GitHub リポジトリ: `https://github.com/RikitoMorikawa/project_01.git`（モノレポ構成）
-- [ ] CodePipeline 用の GitHub トークン
+- [x] CodePipeline 用の GitHub トークン
 - [ ] 監視・アラート用の通知先（SNS、Slack など）
 
 ### セキュリティ・コンプライアンス

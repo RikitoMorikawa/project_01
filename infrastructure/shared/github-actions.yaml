@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "GitHub Actions 統合用リソース定義"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: プロジェクト名
+    Default: csr-lambda-api
+
+  Environment:
+    Type: String
+    Description: 環境名
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Default: dev
+
+Resources:
+  # GitHub Actions 用 IAM ロール（OIDC プロバイダー使用）
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-github-actions-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+              StringLike:
+                "token.actions.githubusercontent.com:sub": "repo:RikitoMorikawa/project_01:*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: GitHubActionsDeployPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:PassRole
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:*
+                  - lambda:*
+                  - apigateway:*
+                  - rds:*
+                  - ec2:*
+                  - logs:*
+                  - cloudfront:*
+                  - route53:*
+                  - acm:*
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                Resource: "*"
+
+  # OIDC プロバイダーは手動で作成する必要があります（一部リージョンで未サポート）
+  # 代わりに既存の IAM ユーザーを使用
+
+  # デプロイ用 S3 バケット
+  DeploymentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-deployment-artifacts"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+Outputs:
+  GitHubActionsRoleArn:
+    Description: GitHub Actions 用 IAM ロール ARN
+    Value: !GetAtt GitHubActionsRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-github-actions-role-arn"
+
+  DeploymentBucketName:
+    Description: デプロイメント用 S3 バケット名
+    Value: !Ref DeploymentBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-deployment-bucket-name"
+
+  GitHubOIDCProviderArn:
+    Description: GitHub OIDC プロバイダー ARN
+    Value: !Ref GitHubOIDCProvider
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-github-oidc-provider-arn"
