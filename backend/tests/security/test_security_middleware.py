@@ -24,7 +24,7 @@ class TestSecurityHeadersMiddleware:
     def test_security_headers_production(self):
         """本番環境でのセキュリティヘッダーテスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         response = client.get("/api/v1/health")
         
         # 基本的なセキュリティヘッダーをチェック
@@ -50,7 +50,7 @@ class TestSecurityHeadersMiddleware:
         
         # 開発環境用の設定でテスト
         with patch.dict("os.environ", {"ENVIRONMENT": "development"}):
-            client = TestClient(app)
+            client = TestClient(app=app)
             response = client.get("/api/v1/health")
             
             # 基本的なセキュリティヘッダーは同じ
@@ -65,7 +65,7 @@ class TestSecurityHeadersMiddleware:
     def test_hsts_header_production_only(self):
         """HSTS ヘッダーが本番環境でのみ設定されることをテスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         response = client.get("/api/v1/health")
         
         # 本番環境では HSTS ヘッダーが設定される
@@ -76,7 +76,7 @@ class TestSecurityHeadersMiddleware:
     def test_cache_control_for_auth_endpoints(self):
         """認証エンドポイントでのキャッシュ制御テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # 認証エンドポイントにアクセス
         response = client.post("/api/v1/auth/login", json={
             "email": "test@example.com",
@@ -93,7 +93,7 @@ class TestRateLimitMiddleware:
     def test_rate_limit_normal_requests(self):
         """通常のリクエストがレート制限に引っかからないことをテスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # 通常の範囲内でリクエストを送信
         for i in range(5):
             response = client.get("/api/v1/health")
@@ -196,7 +196,7 @@ class TestSecurityLoggingMiddleware:
     def test_sql_injection_detection(self, mock_logger):
         """SQL インジェクション攻撃の検出テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # SQL インジェクション攻撃パターンを含むリクエスト
         response = client.get("/api/v1/users?id=1' UNION SELECT * FROM users--")
         
@@ -210,7 +210,7 @@ class TestSecurityLoggingMiddleware:
     def test_xss_detection(self, mock_logger):
         """XSS 攻撃の検出テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # XSS 攻撃パターンを含むリクエスト
         response = client.get("/api/v1/users?search=<script>alert('xss')</script>")
         
@@ -224,7 +224,7 @@ class TestSecurityLoggingMiddleware:
     def test_path_traversal_detection(self, mock_logger):
         """パストラバーサル攻撃の検出テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # パストラバーサル攻撃パターンを含むリクエスト
         response = client.get("/api/v1/users/../../../etc/passwd")
         
@@ -238,7 +238,7 @@ class TestSecurityLoggingMiddleware:
     def test_suspicious_user_agent_detection(self, mock_logger):
         """疑わしいユーザーエージェントの検出テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # 疑わしいユーザーエージェントでリクエスト
         headers = {"User-Agent": "sqlmap/1.0"}
         response = client.get("/api/v1/health", headers=headers)
@@ -253,7 +253,7 @@ class TestSecurityLoggingMiddleware:
     def test_auth_endpoint_logging(self, mock_logger):
         """認証エンドポイントの詳細ログテスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # 認証エンドポイントにアクセス
         response = client.post("/api/v1/auth/login", json={
             "email": "test@example.com",
@@ -270,7 +270,7 @@ class TestSecurityLoggingMiddleware:
     def test_error_response_logging(self, mock_logger):
         """エラーレスポンスのログテスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # 存在しないエンドポイントにアクセス
         response = client.get("/api/v1/nonexistent")
         
@@ -287,7 +287,7 @@ class TestSecurityIntegration:
     def test_security_middleware_order(self):
         """セキュリティミドルウェアの実行順序テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         response = client.get("/api/v1/health")
         
         # レスポンスが正常に処理されることを確認
@@ -300,7 +300,7 @@ class TestSecurityIntegration:
     def test_security_with_cors(self):
         """CORS とセキュリティミドルウェアの連携テスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # CORS プリフライトリクエスト
         response = client.options(
             "/api/v1/users",
@@ -319,7 +319,7 @@ class TestSecurityIntegration:
     def test_security_attack_simulation(self, mock_logger):
         """セキュリティ攻撃シミュレーションテスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         # 複数の攻撃パターンを組み合わせたリクエスト
         malicious_payload = {
             "search": "<script>alert('xss')</script>",
@@ -335,7 +335,7 @@ class TestSecurityIntegration:
     def test_performance_with_security_middleware(self):
         """セキュリティミドルウェア使用時のパフォーマンステスト"""
         
-        client = TestClient(app)
+        client = TestClient(app=app)
         start_time = time.time()
         
         # 複数のリクエストを送信
