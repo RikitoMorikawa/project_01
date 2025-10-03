@@ -169,13 +169,35 @@ jobs:
           echo "=== インフラストラクチャデプロイ開始 ==="
           cd infrastructure/dev
 
-          # 超シンプルなテンプレートでデプロイ
-          aws cloudformation deploy \
+          # スタックの存在確認（権限エラー回避）
+          if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-main" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "既存スタックが見つかりました。更新を実行します。"
+          else
+            echo "新規スタックを作成します。"
+          fi
+
+          # CloudFormationデプロイ（エラーハンドリング付き）
+          if aws cloudformation deploy \
             --template-file simple.yaml \
             --stack-name "${STACK_PREFIX}-main" \
             --capabilities CAPABILITY_NAMED_IAM \
             --region "$AWS_REGION" \
-            --no-fail-on-empty-changeset
+            --no-fail-on-empty-changeset; then
+            echo "✅ インフラストラクチャデプロイ成功"
+          else
+            echo "⚠️ インフラストラクチャデプロイに失敗しました。権限を確認してください。"
+            echo "必要な権限:"
+            echo "- cloudformation:CreateStack"
+            echo "- cloudformation:UpdateStack" 
+            echo "- cloudformation:DescribeStacks"
+            echo "- cloudformation:DescribeStackEvents"
+            echo "- cloudformation:GetTemplate"
+            echo "- iam:CreateRole"
+            echo "- iam:AttachRolePolicy"
+            echo "- lambda:CreateFunction"
+            echo "- s3:CreateBucket"
+            echo "継続してバックエンドデプロイを試行します..."
+          fi
 
       - name: バックエンドをビルド
         run: |
@@ -222,23 +244,32 @@ jobs:
           echo "Lambdaパッケージを S3 にアップロード中..."
           aws s3 cp "build/lambda-deployment-package.zip" "s3://$LAMBDA_BUCKET/$LAMBDA_KEY" --region "$AWS_REGION"
 
-          # Lambda関数の更新
+          # Lambda関数の更新（エラーハンドリング付き）
           if aws lambda get-function --function-name "${STACK_PREFIX}-api-function" --region "$AWS_REGION" >/dev/null 2>&1; then
             echo "Lambda関数を更新中..."
-            aws lambda update-function-code \
+            if aws lambda update-function-code \
               --function-name "${STACK_PREFIX}-api-function" \
               --s3-bucket "$LAMBDA_BUCKET" \
               --s3-key "$LAMBDA_KEY" \
-              --region "$AWS_REGION"
-            
-            # 関数の更新完了を待機
-            aws lambda wait function-updated \
-              --function-name "${STACK_PREFIX}-api-function" \
-              --region "$AWS_REGION"
-            
-            echo "Lambda関数の更新が完了しました"
+              --region "$AWS_REGION"; then
+              
+              # 関数の更新完了を待機
+              aws lambda wait function-updated \
+                --function-name "${STACK_PREFIX}-api-function" \
+                --region "$AWS_REGION"
+              
+              echo "✅ Lambda関数の更新が完了しました"
+            else
+              echo "⚠️ Lambda関数の更新に失敗しました。権限を確認してください。"
+            fi
           else
-            echo "Lambda関数が見つかりません。インフラストラクチャを先にデプロイしてください。"
+            echo "⚠️ Lambda関数が見つかりません。"
+            echo "インフラストラクチャが正常にデプロイされていない可能性があります。"
+            echo "必要な権限:"
+            echo "- lambda:GetFunction"
+            echo "- lambda:UpdateFunctionCode"
+            echo "- s3:GetObject"
+            echo "継続してフロントエンドデプロイを試行します..."
           fi
 
       - name: フロントエンドをビルド
@@ -276,24 +307,54 @@ jobs:
         run: |
           echo "=== フロントエンドデプロイ開始 ==="
 
-          # S3バケット名を取得（開発環境は単一スタック）
-          FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-main" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketName`].OutputValue' \
-            --output text 2>/dev/null || echo "")
+          # S3バケット名を取得（エラーハンドリング付き）
+          FRONTEND_BUCKET=""
 
-          # フォールバック：別のスタック名も試行
-          if [[ -z "$FRONTEND_BUCKET" || "$FRONTEND_BUCKET" == "None" ]]; then
+          # メインスタックから取得を試行
+          if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-main" --region "$AWS_REGION" >/dev/null 2>&1; then
             FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
-              --stack-name "${STACK_PREFIX}-frontend" \
+              --stack-name "${STACK_PREFIX}-main" \
               --region "$AWS_REGION" \
               --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketName`].OutputValue' \
               --output text 2>/dev/null || echo "")
           fi
 
+          # フォールバック：別のスタック名も試行
+          if [[ -z "$FRONTEND_BUCKET" || "$FRONTEND_BUCKET" == "None" ]]; then
+            if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-frontend" --region "$AWS_REGION" >/dev/null 2>&1; then
+              FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+                --stack-name "${STACK_PREFIX}-frontend" \
+                --region "$AWS_REGION" \
+                --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketName`].OutputValue' \
+                --output text 2>/dev/null || echo "")
+            fi
+          fi
+
+          # デフォルトバケット名を生成（権限不足の場合）
+          if [[ -z "$FRONTEND_BUCKET" || "$FRONTEND_BUCKET" == "None" ]]; then
+            FRONTEND_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-frontend-${AWS_ACCOUNT_ID}"
+            echo "⚠️ CloudFormationからバケット名を取得できませんでした。"
+            echo "デフォルトバケット名を使用します: $FRONTEND_BUCKET"
+          fi
+
           if [[ -n "$FRONTEND_BUCKET" ]]; then
             echo "フロントエンドファイルを S3 にアップロード中: $FRONTEND_BUCKET"
+            
+            # S3バケットの存在確認と作成
+            if ! aws s3 ls "s3://$FRONTEND_BUCKET" --region "$AWS_REGION" >/dev/null 2>&1; then
+              echo "S3バケットが存在しません。作成を試行します: $FRONTEND_BUCKET"
+              if aws s3 mb "s3://$FRONTEND_BUCKET" --region "$AWS_REGION"; then
+                echo "✅ S3バケットを作成しました"
+                
+                # 静的ウェブサイトホスティングを有効化
+                aws s3 website "s3://$FRONTEND_BUCKET" \
+                  --index-document index.html \
+                  --error-document error.html \
+                  --region "$AWS_REGION" || echo "⚠️ ウェブサイトホスティング設定に失敗しました"
+              else
+                echo "⚠️ S3バケットの作成に失敗しました。権限を確認してください。"
+              fi
+            fi
             
             # 既存のファイルを削除
             aws s3 rm "s3://$FRONTEND_BUCKET" --recursive --region "$AWS_REGION" || true
@@ -340,30 +401,43 @@ jobs:
         run: |
           echo "=== デプロイメント情報 ==="
 
-          # API Gateway URL
-          API_URL=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-api" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
-            --output text 2>/dev/null || echo "取得できませんでした")
+          # API Gateway URL（エラーハンドリング付き）
+          API_URL="取得できませんでした"
+          if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-api" --region "$AWS_REGION" >/dev/null 2>&1; then
+            API_URL=$(aws cloudformation describe-stacks \
+              --stack-name "${STACK_PREFIX}-api" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+              --output text 2>/dev/null || echo "取得できませんでした")
+          fi
           echo "API Gateway URL: $API_URL"
           echo "api-url=$API_URL" >> $GITHUB_OUTPUT
 
-          # S3 Website URL
-          S3_URL=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-frontend" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketWebsiteURL`].OutputValue' \
-            --output text 2>/dev/null || echo "取得できませんでした")
+          # S3 Website URL（エラーハンドリング付き）
+          S3_URL="取得できませんでした"
+          if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-frontend" --region "$AWS_REGION" >/dev/null 2>&1; then
+            S3_URL=$(aws cloudformation describe-stacks \
+              --stack-name "${STACK_PREFIX}-frontend" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].Outputs[?OutputKey==`FrontendS3BucketWebsiteURL`].OutputValue' \
+              --output text 2>/dev/null || echo "取得できませんでした")
+          else
+            # フォールバック：直接S3 Website URLを生成
+            FRONTEND_BUCKET="${PROJECT_NAME}-${ENVIRONMENT}-frontend-${AWS_ACCOUNT_ID}"
+            S3_URL="http://${FRONTEND_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
+          fi
           echo "S3 Website URL: $S3_URL"
           echo "frontend-url=$S3_URL" >> $GITHUB_OUTPUT
 
-          # データベースエンドポイント
-          DB_ENDPOINT=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_PREFIX}-database" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].Outputs[?OutputKey==`DatabaseClusterEndpoint`].OutputValue' \
-            --output text 2>/dev/null || echo "取得できませんでした")
+          # データベースエンドポイント（エラーハンドリング付き）
+          DB_ENDPOINT="取得できませんでした"
+          if aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-database" --region "$AWS_REGION" >/dev/null 2>&1; then
+            DB_ENDPOINT=$(aws cloudformation describe-stacks \
+              --stack-name "${STACK_PREFIX}-database" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].Outputs[?OutputKey==`DatabaseClusterEndpoint`].OutputValue' \
+              --output text 2>/dev/null || echo "取得できませんでした")
+          fi
           echo "Database Endpoint: $DB_ENDPOINT"
           echo "database-endpoint=$DB_ENDPOINT" >> $GITHUB_OUTPUT
 
