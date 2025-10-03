@@ -240,7 +240,6 @@ Resources:
   FrontendS3Bucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${ProjectName}-${Environment}-frontend-${AWS::AccountId}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: false
         BlockPublicPolicy: false
@@ -274,7 +273,6 @@ Resources:
   LambdaDeploymentBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${ProjectName}-${Environment}-lambda-deployments-${AWS::AccountId}"
       VersioningConfiguration:
         Status: Enabled
       Tags:

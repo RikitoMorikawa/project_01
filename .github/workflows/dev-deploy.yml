@@ -166,15 +166,13 @@ jobs:
           echo "=== インフラストラクチャデプロイ開始 ==="
           cd infrastructure/dev
 
-          # シンプルなデプロイスクリプトを試行
-          if [ -f "simple-deploy.sh" ]; then
-            chmod +x simple-deploy.sh
-            ./simple-deploy.sh
-          else
-            # 元のスクリプトにフォールバック
-            chmod +x deploy.sh
-            ./deploy.sh
-          fi
+          # 超シンプルなテンプレートでデプロイ
+          aws cloudformation deploy \
+            --template-file simple.yaml \
+            --stack-name "${STACK_PREFIX}-main" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region "$AWS_REGION" \
+            --no-fail-on-empty-changeset
 
       - name: バックエンドをビルド
         run: |

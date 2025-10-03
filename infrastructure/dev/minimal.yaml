@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - 最小限の開発環境"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: dev
+    Description: 環境名
+
+Resources:
+  # フロントエンド用S3バケット
+  FrontendS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3バケットのパブリックアクセスブロック設定
+  FrontendS3BucketPublicAccessBlock:
+    Type: AWS::S3::BucketPublicAccessBlock
+    Properties:
+      Bucket: !Ref FrontendS3Bucket
+      BlockPublicAcls: false
+      BlockPublicPolicy: false
+      IgnorePublicAcls: false
+      RestrictPublicBuckets: false
+
+  # S3バケットポリシー
+  FrontendS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: FrontendS3BucketPublicAccessBlock
+    Properties:
+      Bucket: !Ref FrontendS3Bucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendS3Bucket}/*"
+
+Outputs:
+  FrontendS3BucketName:
+    Description: フロントエンド用S3バケット名
+    Value: !Ref FrontendS3Bucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-bucket-name"
+
+  FrontendS3BucketWebsiteURL:
+    Description: フロントエンド用S3バケットWebサイトURL
+    Value: !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-website-url"
