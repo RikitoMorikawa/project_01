@@ -26,8 +26,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile.dev
     container_name: csr-lambda-backend
-    environment:
-      - ENVIRONMENT=dev
+    env_file:
+      - ./backend/.env.dev
     ports:
       - "8000:8000"
     volumes:

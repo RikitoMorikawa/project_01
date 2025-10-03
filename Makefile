@@ -72,3 +72,40 @@ logs: ## Show Docker Compose logs
 
 status: ## Show status of all services
 	@docker-compose ps
+
+# Development Environment Management
+dev-start: ## Start development environment with health checks
+	@echo "Starting development environment..."
+	@./scripts/dev-setup.sh start
+
+dev-stop: ## Stop development environment
+	@echo "Stopping development environment..."
+	@./scripts/dev-setup.sh stop
+
+dev-restart: ## Restart development environment
+	@echo "Restarting development environment..."
+	@./scripts/dev-setup.sh restart
+
+dev-status: ## Show detailed development environment status
+	@./scripts/dev-setup.sh status
+
+dev-logs: ## Show logs for all services (use dev-logs-backend, dev-logs-frontend, dev-logs-mysql for specific services)
+	@./scripts/dev-setup.sh logs
+
+dev-logs-backend: ## Show backend logs
+	@./scripts/dev-setup.sh logs backend
+
+dev-logs-frontend: ## Show frontend logs
+	@./scripts/dev-setup.sh logs frontend
+
+dev-logs-mysql: ## Show MySQL logs
+	@./scripts/dev-setup.sh logs mysql
+
+dev-cleanup: ## Clean up all development containers and volumes
+	@./scripts/dev-setup.sh cleanup
+
+dev-shell-backend: ## Open shell in backend container
+	@docker exec -it csr-lambda-backend /bin/bash
+
+dev-shell-mysql: ## Open MySQL shell
+	@docker exec -it csr-lambda-mysql mysql -u dev_user -p csr_lambda_dev
