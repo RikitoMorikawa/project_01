@@ -16,20 +16,80 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.post("/login", response_model=Dict[str, Any])
+@router.post(
+    "/login", 
+    response_model=Dict[str, Any],
+    summary="ユーザーログイン",
+    description="AWS Cognito を使用したサーバーサイド認証",
+    responses={
+        200: {
+            "description": "ログイン成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": {
+                            "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+                            "token_type": "Bearer",
+                            "expires_in": 3600,
+                            "user": {
+                                "cognito_user_id": "12345678-1234-1234-1234-123456789012",
+                                "username": "testuser",
+                                "email": "user@example.com"
+                            }
+                        },
+                        "message": "ログインに成功しました"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "認証失敗",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error_code": "INVALID_CREDENTIALS",
+                        "message": "メールアドレスまたはパスワードが正しくありません"
+                    }
+                }
+            }
+        },
+        429: {
+            "description": "リクエスト制限超過",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error_code": "TOO_MANY_REQUESTS",
+                        "message": "ログイン試行回数が上限に達しました。しばらく時間をおいて再度お試しください"
+                    }
+                }
+            }
+        }
+    }
+)
 @track_api_call("auth_login")
 async def login(
     login_data: LoginRequest,
     request_id: str = Depends(get_request_id)
 ):
     """
-    Server-side login endpoint using AWS Cognito
+    AWS Cognito を使用したサーバーサイドログインエンドポイント
     
-    This endpoint provides server-side authentication using Cognito's InitiateAuth API.
-    For production use, consider using:
-    1. AWS Amplify Auth on the frontend for better UX
-    2. Cognito Hosted UI for OAuth flows
-    3. This endpoint for server-to-server authentication
+    このエンドポイントは Cognito の InitiateAuth API を使用してサーバーサイド認証を提供します。
+    本番環境では以下の使用を検討してください：
+    1. より良いUXのためのフロントエンドでの AWS Amplify Auth
+    2. OAuth フロー用の Cognito Hosted UI
+    3. サーバー間認証用のこのエンドポイント
+    
+    Args:
+        login_data: ログイン認証情報（メールアドレスとパスワード）
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: 認証結果とアクセストークン
+        
+    Raises:
+        HTTPException: 認証失敗、ユーザー未確認、リクエスト制限超過の場合
     """
     logger.info(f"Login attempt for email: {login_data.email} - Request ID: {request_id}")
     
@@ -135,14 +195,61 @@ async def login(
         )
 
 
-@router.post("/refresh", response_model=Dict[str, Any])
+@router.post(
+    "/refresh", 
+    response_model=Dict[str, Any],
+    summary="アクセストークンリフレッシュ",
+    description="リフレッシュトークンを使用してアクセストークンを更新",
+    responses={
+        200: {
+            "description": "トークンリフレッシュ成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": {
+                            "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+                            "token_type": "Bearer",
+                            "expires_in": 3600
+                        },
+                        "message": "トークンのリフレッシュに成功しました"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "リフレッシュトークンが無効",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error_code": "INVALID_REFRESH_TOKEN",
+                        "message": "リフレッシュトークンが無効または期限切れです"
+                    }
+                }
+            }
+        }
+    }
+)
 @track_api_call("auth_refresh")
 async def refresh_token(
     refresh_data: TokenRefreshRequest,
     request_id: str = Depends(get_request_id)
 ):
     """
-    Refresh access token using refresh token
+    リフレッシュトークンを使用してアクセストークンを更新
+    
+    期限切れのアクセストークンを新しいトークンに更新します。
+    リフレッシュトークンは長期間有効で、新しいアクセストークンの取得に使用されます。
+    
+    Args:
+        refresh_data: リフレッシュトークン情報
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: 新しいアクセストークン情報
+        
+    Raises:
+        HTTPException: リフレッシュトークンが無効または期限切れの場合
     """
     logger.info(f"Token refresh requested - Request ID: {request_id}")
     
@@ -178,7 +285,41 @@ async def refresh_token(
         )
 
 
-@router.post("/logout", response_model=Dict[str, Any])
+@router.post(
+    "/logout", 
+    response_model=Dict[str, Any],
+    summary="ユーザーログアウト",
+    description="Cognito GlobalSignOut を使用して現在のセッションを無効化",
+    responses={
+        200: {
+            "description": "ログアウト成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": {
+                            "message": "ログアウトに成功しました",
+                            "user": "testuser",
+                            "logout_time": "2024-01-01T12:00:00Z"
+                        },
+                        "message": "ユーザーのログアウトに成功しました"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "認証が必要",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error_code": "UNAUTHORIZED",
+                        "message": "認証が必要です"
+                    }
+                }
+            }
+        }
+    }
+)
 @track_api_call("auth_logout")
 async def logout(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -186,12 +327,23 @@ async def logout(
     request_id: str = Depends(get_request_id)
 ):
     """
-    Logout endpoint - Invalidate current session using Cognito GlobalSignOut
+    ログアウトエンドポイント - Cognito GlobalSignOut を使用して現在のセッションを無効化
     
-    This endpoint will:
-    1. Call Cognito's GlobalSignOut API to invalidate all tokens
-    2. Log the logout event
-    3. Return success response
+    このエンドポイントは以下の処理を実行します：
+    1. Cognito の GlobalSignOut API を呼び出してすべてのトークンを無効化
+    2. ログアウトイベントをログに記録
+    3. 成功レスポンスを返却
+    
+    Args:
+        credentials: 認証ヘッダーから取得したアクセストークン
+        current_user: 現在認証されているユーザー情報
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: ログアウト結果とユーザー情報
+        
+    Raises:
+        HTTPException: 認証エラーまたはサーバーエラーの場合
     """
     logger.info(f"Logout requested for user: {current_user.get('username')} - Request ID: {request_id}")
     

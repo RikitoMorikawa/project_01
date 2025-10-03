@@ -1,19 +1,41 @@
+/**
+ * 認証フォームコンポーネント
+ *
+ * ログイン、ユーザー登録、パスワードリセットなどの認証関連フォームを
+ * 統一されたインターフェースで提供する。バリデーション、エラーハンドリング、
+ * ソーシャルログイン機能を含む。
+ */
 import React, { useState } from "react";
 import { Form, Input, Button } from "@/components/ui";
 import PasswordStrengthIndicator from "./PasswordStrengthIndicator";
 
+/**
+ * 認証フォームのプロパティ
+ */
 export interface AuthFormProps {
+  /** フォームの種類 */
   type: "login" | "register" | "forgot-password" | "reset-password";
+  /** フォーム送信時のコールバック */
   onSubmit: (data: any) => Promise<void>;
+  /** ローディング状態 */
   loading?: boolean;
+  /** エラーメッセージ */
   error?: string | null;
+  /** 成功メッセージ */
   success?: string | null;
+  /** フォームの初期値 */
   initialData?: Record<string, string>;
+  /** パスワード強度インジケーターの表示 */
   showPasswordStrength?: boolean;
+  /** ソーシャルログインボタンの表示 */
   showSocialLogin?: boolean;
+  /** ソーシャルログイン時のコールバック */
   onSocialLogin?: (provider: "google" | "github") => void;
 }
 
+/**
+ * 認証フォームコンポーネント
+ */
 const AuthForm: React.FC<AuthFormProps> = ({
   type,
   onSubmit,
@@ -25,32 +47,47 @@ const AuthForm: React.FC<AuthFormProps> = ({
   showSocialLogin = false,
   onSocialLogin,
 }) => {
+  // フォームデータの状態管理
   const [formData, setFormData] = useState<Record<string, string>>(initialData);
+  // バリデーションエラーの状態管理
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  /**
+   * 入力値変更時の処理
+   *
+   * @param e 入力イベント
+   */
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
 
-    // エラーをクリア
+    // 該当フィールドのエラーをクリア
     if (errors[name]) {
       setErrors((prev) => ({ ...prev, [name]: "" }));
     }
   };
 
+  /**
+   * フォームバリデーション
+   *
+   * フォームの種類に応じて適切なバリデーションを実行する。
+   *
+   * @returns バリデーション結果（true: 成功, false: 失敗）
+   */
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    // 共通バリデーション
+    // 共通バリデーション - メールアドレス
     if (type !== "reset-password" && !formData.email) {
       newErrors.email = "メールアドレスを入力してください";
     } else if (type !== "reset-password" && formData.email && !/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = "有効なメールアドレスを入力してください";
     }
 
-    // タイプ別バリデーション
+    // フォームタイプ別バリデーション
     switch (type) {
       case "register":
+        // ユーザー名バリデーション
         if (!formData.username) {
           newErrors.username = "ユーザー名を入力してください";
         } else if (formData.username.length < 3) {
@@ -62,6 +99,7 @@ const AuthForm: React.FC<AuthFormProps> = ({
         } else if (formData.password.length < 8) {
           newErrors.password = "パスワードは8文字以上で入力してください";
         }
+        // パスワード確認バリデーション
         if (!formData.confirmPassword) {
           newErrors.confirmPassword = "パスワード確認を入力してください";
         } else if (formData.password !== formData.confirmPassword) {
@@ -70,20 +108,24 @@ const AuthForm: React.FC<AuthFormProps> = ({
         break;
 
       case "login":
+        // ログイン時のパスワードバリデーション
         if (!formData.password) {
           newErrors.password = "パスワードを入力してください";
         }
         break;
 
       case "reset-password":
+        // 確認コードバリデーション
         if (!formData.confirmationCode) {
           newErrors.confirmationCode = "確認コードを入力してください";
         }
+        // 新しいパスワードバリデーション
         if (!formData.newPassword) {
           newErrors.newPassword = "新しいパスワードを入力してください";
         } else if (formData.newPassword.length < 8) {
           newErrors.newPassword = "パスワードは8文字以上で入力してください";
         }
+        // パスワード確認バリデーション
         if (!formData.confirmPassword) {
           newErrors.confirmPassword = "パスワード確認を入力してください";
         } else if (formData.newPassword !== formData.confirmPassword) {
@@ -96,16 +138,28 @@ const AuthForm: React.FC<AuthFormProps> = ({
     return Object.keys(newErrors).length === 0;
   };
 
+  /**
+   * フォーム送信処理
+   *
+   * @param e フォーム送信イベント
+   */
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // バリデーション実行
     if (!validateForm()) {
       return;
     }
 
+    // 親コンポーネントの送信処理を呼び出し
     await onSubmit(formData);
   };
 
+  /**
+   * フォームタイトルを取得
+   *
+   * @returns フォームタイトル
+   */
   const getFormTitle = () => {
     switch (type) {
       case "login":
@@ -121,6 +175,11 @@ const AuthForm: React.FC<AuthFormProps> = ({
     }
   };
 
+  /**
+   * 送信ボタンのラベルを取得
+   *
+   * @returns 送信ボタンのラベル
+   */
   const getSubmitLabel = () => {
     switch (type) {
       case "login":

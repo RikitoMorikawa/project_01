@@ -276,13 +276,41 @@ async def check_database_connection_with_metrics() -> Dict[str, Any]:
         }
 
 
-@router.get("/")
+@router.get(
+    "/",
+    summary="基本ヘルスチェック",
+    description="システムの基本的な稼働状況を確認",
+    responses={
+        200: {
+            "description": "システム正常稼働中",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "healthy",
+                        "message": "CSR Lambda API is running",
+                        "version": "1.0.0",
+                        "environment": "dev",
+                        "timestamp": "2024-01-01T12:00:00Z"
+                    }
+                }
+            }
+        }
+    }
+)
 async def health_check(
     request_id: str = Depends(get_request_id)
 ):
     """
-    Health check endpoint
-    Returns system status and basic information
+    ヘルスチェックエンドポイント
+    
+    システムの基本的な稼働状況と情報を返します。
+    ロードバランサーやモニタリングシステムからの生存確認に使用されます。
+    
+    Args:
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: システムステータスと基本情報
     """
     logger.info(f"Health check requested - Request ID: {request_id}")
     
@@ -298,13 +326,52 @@ async def health_check(
     return health_data
 
 
-@router.get("/detailed")
+@router.get(
+    "/detailed",
+    summary="詳細ヘルスチェック",
+    description="依存関係とメトリクスを含む包括的なシステム状況を確認",
+    responses={
+        200: {
+            "description": "詳細システム情報",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "healthy",
+                        "message": "CSR Lambda API is running",
+                        "version": "1.0.0",
+                        "environment": "dev",
+                        "timestamp": "2024-01-01T12:00:00Z",
+                        "checks": {
+                            "api": {"status": "healthy", "message": "API is responsive"},
+                            "database": {"status": "healthy", "message": "Database connection successful"},
+                            "cognito": {"status": "healthy", "message": "Cognito service accessible"}
+                        },
+                        "metrics": {
+                            "system": {
+                                "cpu_percent": 15.2,
+                                "memory_percent": 45.8
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
 async def detailed_health_check(
     request_id: str = Depends(get_request_id)
 ):
     """
-    Detailed health check endpoint
-    Returns comprehensive system status including dependencies and metrics
+    詳細ヘルスチェックエンドポイント
+    
+    依存関係とメトリクスを含む包括的なシステム状況を返します。
+    データベース、Cognito、CloudWatch などの外部サービスの接続状況も確認します。
+    
+    Args:
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: 詳細なシステム状況と依存関係の情報
     """
     logger.info(f"Detailed health check requested - Request ID: {request_id}")
     

@@ -1,3 +1,9 @@
+/**
+ * 認証フック
+ *
+ * AWS Amplify と既存の認証システムを統合した認証機能を提供する。
+ * ログイン、ログアウト、ユーザー情報取得、トークン管理などの機能を含む。
+ */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/auth-store";
 import { useNotifications } from "@/stores/ui-store";
@@ -6,9 +12,18 @@ import { queryKeys } from "@/lib/query-client";
 import { User, LoginCredentials } from "@/types";
 import { useAmplifyAuth } from "@/hooks/use-amplify-auth";
 
-// 認証API関数
+/**
+ * 認証 API 関数群
+ *
+ * バックエンド API との認証関連通信を行う関数を定義する。
+ */
 const authApi = {
-  // ログイン
+  /**
+   * ログイン処理
+   *
+   * @param credentials ログイン認証情報
+   * @returns ユーザー情報とアクセストークン
+   */
   login: async (credentials: LoginCredentials) => {
     const response = await apiClient.post<{
       user: User;
@@ -18,18 +33,28 @@ const authApi = {
     return response;
   },
 
-  // ログアウト
+  /**
+   * ログアウト処理
+   */
   logout: async () => {
     await apiClient.post("/api/v1/auth/logout");
   },
 
-  // 現在のユーザー情報取得
+  /**
+   * 現在のユーザー情報を取得
+   *
+   * @returns 現在ログイン中のユーザー情報
+   */
   getCurrentUser: async (): Promise<User> => {
     const response = await apiClient.get<{ data: User }>("/api/v1/auth/me");
     return response.data;
   },
 
-  // トークンリフレッシュ
+  /**
+   * アクセストークンをリフレッシュ
+   *
+   * @returns 新しいアクセストークン
+   */
   refreshToken: async () => {
     const response = await apiClient.post<{
       access_token: string;
@@ -39,13 +64,20 @@ const authApi = {
   },
 };
 
-// 統合認証フック（Amplify + 既存システム）
+/**
+ * 統合認証フック（Amplify + 既存システム）
+ *
+ * AWS Amplify の認証機能と既存の認証システムを統合し、
+ * 統一されたインターフェースで認証機能を提供する。
+ *
+ * @returns 認証状態と認証操作関数
+ */
 export const useAuth = () => {
   const queryClient = useQueryClient();
   const { user, isAuthenticated, login: setLogin, logout: setLogout, setError, setLoading } = useAuthStore();
   const notifications = useNotifications();
 
-  // Amplify認証フックを使用
+  // Amplify 認証フックを使用
   const {
     signIn: amplifySignIn,
     signOut: amplifySignOut,
@@ -59,19 +91,19 @@ export const useAuth = () => {
     getToken,
   } = useAmplifyAuth();
 
-  // 現在のユーザー情報を取得
+  // 現在のユーザー情報を取得するクエリ
   const { data: currentUser, isLoading: isUserLoading } = useQuery({
     queryKey: queryKeys.auth.user(),
     queryFn: authApi.getCurrentUser,
     enabled: isAuthenticated,
-    staleTime: 10 * 60 * 1000, // 10分
+    staleTime: 10 * 60 * 1000, // 10分間キャッシュ
     retry: false,
   });
 
-  // ログインミューテーション（Amplifyを使用）
+  // ログインミューテーション（Amplify を使用）
   const loginMutation = useMutation({
     mutationFn: async (credentials: LoginCredentials) => {
-      // Amplifyでサインイン
+      // Amplify でサインイン
       await amplifySignIn(credentials.email, credentials.password);
       return { success: true };
     },
@@ -80,8 +112,8 @@ export const useAuth = () => {
       setError(null);
     },
     onSuccess: () => {
-      // Amplifyが自動的にユーザー情報とトークンを管理
-      // クエリキャッシュを無効化
+      // Amplify が自動的にユーザー情報とトークンを管理
+      // クエリキャッシュを無効化して最新情報を取得
       queryClient.invalidateQueries({ queryKey: queryKeys.auth.user() });
     },
     onError: (error: any) => {
@@ -93,10 +125,10 @@ export const useAuth = () => {
     },
   });
 
-  // ログアウトミューテーション（Amplifyを使用）
+  // ログアウトミューテーション（Amplify を使用）
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      // Amplifyでサインアウト
+      // Amplify でサインアウト
       await amplifySignOut();
       return { success: true };
     },
@@ -104,7 +136,7 @@ export const useAuth = () => {
       setLoading(true);
     },
     onSuccess: () => {
-      // Amplifyが自動的にクリーンアップを実行
+      // Amplify が自動的にクリーンアップを実行
       // 全てのクエリキャッシュをクリア
       queryClient.clear();
     },

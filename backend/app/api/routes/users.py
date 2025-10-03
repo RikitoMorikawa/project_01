@@ -20,21 +20,80 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/", response_model=Dict[str, Any])
+@router.get(
+    "/", 
+    response_model=Dict[str, Any],
+    summary="ユーザー一覧取得",
+    description="ページネーションと検索機能付きでユーザー一覧を取得（認証必須）",
+    responses={
+        200: {
+            "description": "ユーザー一覧取得成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": [
+                            {
+                                "id": 1,
+                                "cognito_user_id": "12345678-1234-1234-1234-123456789012",
+                                "email": "user@example.com",
+                                "username": "testuser",
+                                "created_at": "2024-01-01T12:00:00Z"
+                            }
+                        ],
+                        "pagination": {
+                            "total": 100,
+                            "page": 1,
+                            "page_size": 10,
+                            "total_pages": 10
+                        },
+                        "message": "ユーザー一覧の取得に成功しました"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "認証が必要",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error_code": "UNAUTHORIZED",
+                        "message": "認証が必要です"
+                    }
+                }
+            }
+        }
+    }
+)
 @track_api_call("users_list")
 async def get_users(
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(10, ge=1, le=100, description="Items per page"),
-    search: Optional[str] = Query(None, description="Search term for username or email"),
+    page: int = Query(1, ge=1, description="ページ番号"),
+    page_size: int = Query(10, ge=1, le=100, description="1ページあたりの件数"),
+    search: Optional[str] = Query(None, description="ユーザー名またはメールアドレスの検索キーワード"),
     current_user: Dict[str, Any] = Depends(get_current_user),
     db: pymysql.Connection = Depends(get_db),
     request_id: str = Depends(get_request_id)
 ):
     """
-    Get list of users with pagination and search
-    Requires authentication
     ページネーションと検索機能付きでユーザー一覧を取得
-    認証が必要
+    
+    認証されたユーザーがシステム内のユーザー一覧を取得できます。
+    ページネーション機能により大量のデータを効率的に処理し、
+    検索機能によりユーザー名やメールアドレスでフィルタリングできます。
+    
+    Args:
+        page: ページ番号（1から開始）
+        page_size: 1ページあたりの件数（1-100）
+        search: 検索キーワード（ユーザー名またはメールアドレス）
+        current_user: 現在認証されているユーザー情報
+        db: データベース接続
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: ユーザー一覧とページネーション情報
+        
+    Raises:
+        HTTPException: 認証エラーまたはサーバーエラーの場合
     """
     logger.info(f"Get users requested by: {current_user.get('username')} - Request ID: {request_id}")
     
@@ -71,7 +130,43 @@ async def get_users(
         )
 
 
-@router.post("/", response_model=Dict[str, Any])
+@router.post(
+    "/", 
+    response_model=Dict[str, Any],
+    summary="新規ユーザー作成",
+    description="管理者権限で新しいユーザーを作成",
+    responses={
+        201: {
+            "description": "ユーザー作成成功",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "data": {
+                            "id": 1,
+                            "cognito_user_id": "temp_testuser",
+                            "email": "user@example.com",
+                            "username": "testuser",
+                            "created_at": "2024-01-01T12:00:00Z"
+                        },
+                        "message": "ユーザーの作成に成功しました"
+                    }
+                }
+            }
+        },
+        409: {
+            "description": "ユーザー情報の競合",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error_code": "USER_CONFLICT",
+                        "message": "このメールアドレスは既に使用されています"
+                    }
+                }
+            }
+        }
+    }
+)
 @track_api_call("users_create")
 async def create_user(
     user_data: UserCreate,
@@ -80,21 +175,26 @@ async def create_user(
     request_id: str = Depends(get_request_id)
 ):
     """
-    Create a new user
-    Note: In a Cognito-based system, users are typically created through:
-    1. Cognito sign-up process
-    2. Admin API calls
-    3. Automatic sync from Cognito events
-    
-    This endpoint is for administrative purposes or manual user creation
-    
     新しいユーザーを作成
-    注意：Cognitoベースのシステムでは、通常以下の方法でユーザーが作成される：
-    1. Cognitoサインアッププロセス
-    2. 管理者API呼び出し
-    3. Cognitoイベントからの自動同期
     
-    このエンドポイントは管理目的または手動ユーザー作成用
+    注意：Cognito ベースのシステムでは、通常以下の方法でユーザーが作成されます：
+    1. Cognito サインアッププロセス
+    2. 管理者 API 呼び出し
+    3. Cognito イベントからの自動同期
+    
+    このエンドポイントは管理目的または手動ユーザー作成用です。
+    
+    Args:
+        user_data: 作成するユーザーの情報
+        current_user: 現在認証されているユーザー情報
+        db: データベース接続
+        request_id: リクエスト追跡用ID
+        
+    Returns:
+        Dict[str, Any]: 作成されたユーザー情報
+        
+    Raises:
+        HTTPException: ユーザー情報の競合またはサーバーエラーの場合
     """
     logger.info(f"Create user requested by: {current_user.get('username')} - Request ID: {request_id}")
     

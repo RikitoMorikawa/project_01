@@ -1,3 +1,10 @@
+"""
+AWS Lambda ハンドラー
+
+FastAPI アプリケーションを AWS Lambda 環境で実行するためのハンドラー。
+Mangum を使用して ASGI アプリケーションを Lambda イベントに変換する。
+パフォーマンス最適化、エラーハンドリング、メトリクス収集機能を含む。
+"""
 import logging
 import os
 import time
@@ -5,7 +12,7 @@ from mangum import Mangum
 from app.main import app
 from app.utils.performance import optimize_lambda_startup, warm_up_connections
 
-# Configure logging for Lambda
+# Lambda 用ログ設定
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -20,12 +27,12 @@ startup_time = time.time() - startup_start
 
 logger.info(f"Lambda 初期化完了: {startup_time:.3f}秒")
 
-# Configure Mangum for Lambda with performance optimizations
+# Lambda 用 Mangum ハンドラーの設定（パフォーマンス最適化付き）
 handler = Mangum(
     app,
-    lifespan="off",  # Disable lifespan for Lambda
+    lifespan="off",  # Lambda では lifespan を無効化
     api_gateway_base_path="/v1" if os.getenv("ENVIRONMENT") != "dev" else None,
-    # パフォーマンス最適化設定
+    # パフォーマンス最適化設定 - テキスト MIME タイプの指定
     text_mime_types=[
         "application/json",
         "application/javascript",
@@ -43,16 +50,31 @@ handler = Mangum(
 _connections_warmed = False
 
 async def warm_connections_once():
-    """接続を一度だけウォームアップ"""
+    """
+    接続を一度だけウォームアップ
+    
+    Lambda コンテナの初回実行時にデータベース接続などを
+    事前に確立してレスポンス時間を改善する。
+    """
     global _connections_warmed
     if not _connections_warmed:
         await warm_up_connections()
         _connections_warmed = True
 
-# Lambda handler wrapper for additional logging and performance monitoring
 def lambda_handler(event, context):
     """
-    AWS Lambda handler with enhanced logging, error handling, and performance monitoring
+    AWS Lambda メインハンドラー
+    
+    拡張ログ、エラーハンドリング、パフォーマンス監視機能付きの Lambda ハンドラー。
+    API Gateway からのイベントを FastAPI アプリケーションに転送し、
+    レスポンス時間やエラー率などのメトリクスを CloudWatch に送信する。
+    
+    Args:
+        event (dict): API Gateway からの Lambda イベント
+        context (LambdaContext): Lambda 実行コンテキスト
+        
+    Returns:
+        dict: API Gateway 形式のレスポンス
     """
     request_start = time.time()
     
@@ -97,8 +119,8 @@ def lambda_handler(event, context):
             response['headers']['X-Response-Time'] = f"{request_time:.3f}s"
             response['headers']['X-Lambda-Request-Id'] = context.aws_request_id
         
-        # 遅いリクエストを警告
-        if request_time > 5.0:  # 5秒以上
+        # 遅いリクエストを警告（5秒以上）
+        if request_time > 5.0:
             logger.warning(f"遅いリクエスト検出: {http_method} {path} - {request_time:.3f}秒")
         
         return response
