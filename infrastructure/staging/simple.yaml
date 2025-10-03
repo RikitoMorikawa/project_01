@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - シンプルステージング環境"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: staging
+    Description: 環境名
+
+Resources:
+  # フロントエンド用S3バケット
+  FrontendS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-frontend"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendS3Bucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        Enabled: true
+        DefaultRootObject: index.html
+        Comment: !Sub "${ProjectName} ${Environment} CloudFront Distribution"
+        PriceClass: PriceClass_100
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront"
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  FrontendS3BucketName:
+    Description: フロントエンド用S3バケット名
+    Value: !Ref FrontendS3Bucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-bucket-name"
+
+  FrontendS3BucketWebsiteURL:
+    Description: フロントエンド用S3バケットWebサイトURL
+    Value: !GetAtt FrontendS3Bucket.WebsiteURL
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-website-url"
+
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-distribution-id"
+
+  CloudFrontDistributionDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-cloudfront-domain-name"

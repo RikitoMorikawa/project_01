@@ -195,8 +195,20 @@ jobs:
         run: |
           echo "=== ステージングインフラストラクチャデプロイ開始 ==="
           cd infrastructure/staging
-          chmod +x deploy.sh
-          ./deploy.sh
+
+          # シンプルなデプロイスクリプトを試行
+          if [ -f "simple-deploy.sh" ]; then
+            chmod +x simple-deploy.sh
+            ./simple-deploy.sh
+          else
+            # 直接CloudFormationデプロイ
+            aws cloudformation deploy \
+              --template-file simple.yaml \
+              --stack-name "${STACK_PREFIX}-main" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "$AWS_REGION" \
+              --no-fail-on-empty-changeset
+          fi
 
       - name: バックエンドをビルド
         run: |
