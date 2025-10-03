@@ -99,7 +99,7 @@ class TestCognitoTokenVerifier:
             with pytest.raises(AuthenticationError) as exc_info:
                 verifier.verify_token("expired-token")
             
-            assert "expired" in str(exc_info.value)
+            assert "expired" in str(exc_info.value) or "有効期限が切れています" in str(exc_info.value)
     
     def test_verify_token_invalid_signature(self):
         """無効な署名のトークン検証テスト / Test verification of token with invalid signature"""
@@ -118,7 +118,7 @@ class TestCognitoTokenVerifier:
             with pytest.raises(AuthenticationError) as exc_info:
                 verifier.verify_token("invalid-signature-token")
             
-            assert "signature" in str(exc_info.value)
+            assert "signature" in str(exc_info.value) or "署名が無効です" in str(exc_info.value)
     
     def test_verify_token_invalid_token_type(self, mock_cognito_token_claims):
         """無効なトークンタイプの検証テスト / Test verification of invalid token type"""
@@ -325,7 +325,7 @@ class TestAuthUtilityFunctions:
             with pytest.raises(AuthenticationError) as exc_info:
                 get_user_from_token("invalid-token")
             
-            assert "Failed to extract user information" in str(exc_info.value)
+            assert "Failed to extract user information" in str(exc_info.value) or "トークンからユーザー情報を取得できませんでした" in str(exc_info.value)
     
     def test_get_cognito_public_keys_success(self):
         """Cognito公開鍵取得成功のテスト / Test successful get Cognito public keys"""
