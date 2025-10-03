@@ -1,0 +1,517 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Production Environment CloudWatch Dashboard"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: 環境名
+
+Resources:
+  # 本番環境システム監視ダッシュボード
+  SystemDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-system-overview"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 2,
+              "properties": {
+                "markdown": "# ${ProjectName} ${Environment} 本番システム監視ダッシュボード\n\n**環境**: ${Environment} | **リージョン**: ${AWS::Region} | **重要度**: CRITICAL | **24/7監視対象**"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 2,
+              "width": 6,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Errors", "FunctionName", "${ProjectName}-${Environment}-api" ],
+                  [ ".", "Throttles", ".", "." ]
+                ],
+                "view": "singleValue",
+                "region": "${AWS::Region}",
+                "title": "🚨 クリティカルエラー",
+                "period": 300,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 6,
+              "y": 2,
+              "width": 6,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "5XXError", "ApiName", "${ProjectName}-${Environment}-api", "Stage", "v1" ]
+                ],
+                "view": "singleValue",
+                "region": "${AWS::Region}",
+                "title": "🚨 API 5xx エラー",
+                "period": 300,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 2,
+              "width": 6,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/RDS", "CPUUtilization", "DBClusterIdentifier", "${ProjectName}-${Environment}-aurora-cluster" ]
+                ],
+                "view": "singleValue",
+                "region": "${AWS::Region}",
+                "title": "📊 DB CPU使用率",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 18,
+              "y": 2,
+              "width": 6,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-${Environment}-api" ]
+                ],
+                "view": "singleValue",
+                "region": "${AWS::Region}",
+                "title": "⏱️ 平均レスポンス時間",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-${Environment}-api", { "stat": "Average" } ],
+                  [ ".", ".", ".", ".", { "stat": "p95" } ],
+                  [ ".", ".", ".", ".", { "stat": "p99" } ],
+                  [ ".", "Invocations", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "Errors", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "Throttles", ".", ".", { "stat": "Sum" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Lambda 関数パフォーマンス（本番）",
+                "period": 300,
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 8,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${ProjectName}-${Environment}-api" ],
+                  [ ".", "ProvisionedConcurrencyUtilization", ".", "." ],
+                  [ ".", "ProvisionedConcurrencyInvocations", ".", "." ],
+                  [ ".", "ProvisionedConcurrencySpilloverInvocations", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Lambda 同時実行・Provisioned Concurrency",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 14,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "Count", "ApiName", "${ProjectName}-${Environment}-api", "Stage", "v1" ],
+                  [ ".", "4XXError", ".", ".", ".", "." ],
+                  [ ".", "5XXError", ".", ".", ".", "." ],
+                  [ ".", "Latency", ".", ".", ".", ".", { "stat": "Average" } ],
+                  [ ".", "IntegrationLatency", ".", ".", ".", ".", { "stat": "Average" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "API Gateway メトリクス（本番）",
+                "period": 300,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 14,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/RDS", "CPUUtilization", "DBClusterIdentifier", "${ProjectName}-${Environment}-aurora-cluster" ],
+                  [ ".", "DatabaseConnections", ".", "." ],
+                  [ ".", "ReadLatency", ".", ".", { "stat": "Average" } ],
+                  [ ".", "WriteLatency", ".", ".", { "stat": "Average" } ],
+                  [ ".", "FreeableMemory", ".", "." ],
+                  [ ".", "ReadThroughput", ".", "." ],
+                  [ ".", "WriteThroughput", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "Aurora データベース（本番）",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 20,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/CloudFront", "Requests", "DistributionId", "${AWS::StackName}-cloudfront-distribution" ],
+                  [ ".", "BytesDownloaded", ".", "." ],
+                  [ ".", "ErrorRate", ".", "." ],
+                  [ ".", "OriginLatency", ".", "." ],
+                  [ ".", "CacheHitRate", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "us-east-1",
+                "title": "CloudFront CDN（本番）",
+                "period": 300,
+                "stat": "Average"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 20,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "user_logins" ],
+                  [ ".", "user_registrations" ],
+                  [ ".", "api_calls_total", "endpoint", "auth_login" ],
+                  [ ".", ".", ".", "users_list" ],
+                  [ ".", "authentication_failures", "reason", "invalid_credentials" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "ビジネスメトリクス（本番）",
+                "period": 300,
+                "stat": "Sum"
+              }
+            }
+          ]
+        }
+
+  # 本番環境ビジネスダッシュボード
+  BusinessDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-business-metrics"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 2,
+              "properties": {
+                "markdown": "# ${ProjectName} ${Environment} ビジネスメトリクス\n\n**ユーザー行動分析・ビジネス KPI 監視**"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 2,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "user_logins", { "stat": "Sum" } ],
+                  [ ".", "user_registrations", { "stat": "Sum" } ],
+                  [ ".", "user_logouts", { "stat": "Sum" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "📈 ユーザーアクティビティ",
+                "period": 3600,
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8,
+              "y": 2,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "api_calls_total", "endpoint", "auth_login" ],
+                  [ ".", ".", ".", "users_list" ],
+                  [ ".", ".", ".", "users_get" ],
+                  [ ".", ".", ".", "users_create" ],
+                  [ ".", ".", ".", "users_update" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "🔗 API エンドポイント使用状況",
+                "period": 3600,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16,
+              "y": 2,
+              "width": 8,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "authentication_failures", "reason", "invalid_credentials" ],
+                  [ ".", ".", ".", "user_not_found" ],
+                  [ ".", ".", ".", "user_not_confirmed" ],
+                  [ ".", "validation_errors", "field", "email" ],
+                  [ ".", ".", ".", "password" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "⚠️ エラー分析",
+                "period": 3600,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 8,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "api_response_time", "endpoint", "auth_login", { "stat": "Average" } ],
+                  [ ".", ".", ".", "users_list", { "stat": "Average" } ],
+                  [ ".", ".", ".", "users_get", { "stat": "Average" } ],
+                  [ ".", ".", ".", "auth_login", { "stat": "p95" } ],
+                  [ ".", ".", ".", "users_list", { "stat": "p95" } ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "⏱️ API レスポンス時間分析",
+                "period": 900,
+                "yAxis": {
+                  "left": {
+                    "label": "ミリ秒"
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 8,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "db_operations_total", "operation", "user_create" ],
+                  [ ".", ".", ".", "user_update" ],
+                  [ ".", ".", ".", "user_query" ],
+                  [ ".", "db_operations_success", "operation", "user_create" ],
+                  [ ".", ".", ".", "user_update" ],
+                  [ ".", ".", ".", "user_query" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "💾 データベース操作",
+                "period": 900,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 14,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/lambda/${ProjectName}-${Environment}-custom-metrics'\n| fields @timestamp, metric_name, value, dimensions\n| filter metric_name in ['user_logins', 'user_registrations', 'authentication_failures']\n| stats sum(value) by metric_name, bin(5m)\n| sort @timestamp desc",
+                "region": "${AWS::Region}",
+                "title": "📊 ビジネスメトリクス集計（5分間隔）",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+  # 本番環境セキュリティ監視ダッシュボード
+  SecurityDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-security-monitoring"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 2,
+              "properties": {
+                "markdown": "# ${ProjectName} ${Environment} セキュリティ監視\n\n**認証・認可・セキュリティイベント監視**"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 2,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "CSR-Lambda-API", "authentication_failures", "reason", "invalid_credentials" ],
+                  [ ".", ".", ".", "user_not_found" ],
+                  [ ".", ".", ".", "user_not_confirmed" ],
+                  [ ".", ".", ".", "too_many_requests" ]
+                ],
+                "view": "timeSeries",
+                "stacked": true,
+                "region": "${AWS::Region}",
+                "title": "🔒 認証失敗パターン分析",
+                "period": 300,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 2,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "4XXError", "ApiName", "${ProjectName}-${Environment}-api", "Stage", "v1" ],
+                  [ ".", "Count", ".", ".", ".", "." ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${AWS::Region}",
+                "title": "🚫 API アクセス拒否・エラー",
+                "period": 300,
+                "stat": "Sum"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 8,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/lambda/${ProjectName}-${Environment}-api'\n| fields @timestamp, @message, @requestId\n| filter @message like /authentication_failures/ or @message like /UNAUTHORIZED/ or @message like /FORBIDDEN/\n| sort @timestamp desc\n| limit 100",
+                "region": "${AWS::Region}",
+                "title": "🔍 セキュリティ関連ログ",
+                "view": "table"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 14,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/lambda/${ProjectName}-${Environment}-api'\n| fields @timestamp, @message\n| filter @message like /Login attempt/ or @message like /Login failed/ or @message like /Login successful/\n| stats count() by bin(1h)\n| sort @timestamp desc",
+                "region": "${AWS::Region}",
+                "title": "📈 ログイン試行パターン（時間別）",
+                "view": "table"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  SystemDashboardName:
+    Description: システム監視ダッシュボード名
+    Value: !Ref SystemDashboard
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-system-dashboard-name"
+
+  SystemDashboardUrl:
+    Description: システム監視ダッシュボード URL
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-${Environment}-system-overview"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-system-dashboard-url"
+
+  BusinessDashboardName:
+    Description: ビジネスメトリクスダッシュボード名
+    Value: !Ref BusinessDashboard
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-business-dashboard-name"
+
+  BusinessDashboardUrl:
+    Description: ビジネスメトリクスダッシュボード URL
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-${Environment}-business-metrics"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-business-dashboard-url"
+
+  SecurityDashboardName:
+    Description: セキュリティ監視ダッシュボード名
+    Value: !Ref SecurityDashboard
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-security-dashboard-name"
+
+  SecurityDashboardUrl:
+    Description: セキュリティ監視ダッシュボード URL
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-${Environment}-security-monitoring"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-security-dashboard-url"

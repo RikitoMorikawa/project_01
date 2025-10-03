@@ -9,6 +9,7 @@ from app.auth.cognito import cognito_verifier
 from app.auth.dependencies import get_current_user, security
 from app.exceptions import AuthenticationError, ExternalServiceError
 from app.utils.response import success_response, error_response
+from app.utils.metrics import track_api_call, BusinessMetrics
 from app.dependencies import get_request_id
 
 router = APIRouter()
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/login", response_model=Dict[str, Any])
+@track_api_call("auth_login")
 async def login(
     login_data: LoginRequest,
     request_id: str = Depends(get_request_id)
@@ -49,6 +51,9 @@ async def login(
             # Verify the access token to get user info
             access_token = auth_result.get('AccessToken')
             user_claims = cognito_verifier.verify_token(access_token)
+            
+            # Track successful login
+            BusinessMetrics.track_user_login()
             
             return success_response(
                 data={
@@ -92,6 +97,7 @@ async def login(
         
     except cognito_verifier.cognito_client.exceptions.NotAuthorizedException:
         logger.warning(f"Login failed - invalid credentials for: {login_data.email} - Request ID: {request_id}")
+        BusinessMetrics.track_authentication_failure("invalid_credentials")
         return error_response(
             error_code="INVALID_CREDENTIALS",
             message="Invalid email or password",
@@ -99,6 +105,7 @@ async def login(
         )
     except cognito_verifier.cognito_client.exceptions.UserNotConfirmedException:
         logger.warning(f"Login failed - user not confirmed: {login_data.email} - Request ID: {request_id}")
+        BusinessMetrics.track_authentication_failure("user_not_confirmed")
         return error_response(
             error_code="USER_NOT_CONFIRMED",
             message="User account is not confirmed. Please check your email for confirmation instructions.",
@@ -106,6 +113,7 @@ async def login(
         )
     except cognito_verifier.cognito_client.exceptions.UserNotFoundException:
         logger.warning(f"Login failed - user not found: {login_data.email} - Request ID: {request_id}")
+        BusinessMetrics.track_authentication_failure("user_not_found")
         return error_response(
             error_code="USER_NOT_FOUND",
             message="User not found",
@@ -128,6 +136,7 @@ async def login(
 
 
 @router.post("/refresh", response_model=Dict[str, Any])
+@track_api_call("auth_refresh")
 async def refresh_token(
     refresh_data: TokenRefreshRequest,
     request_id: str = Depends(get_request_id)
@@ -170,6 +179,7 @@ async def refresh_token(
 
 
 @router.post("/logout", response_model=Dict[str, Any])
+@track_api_call("auth_logout")
 async def logout(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -195,6 +205,9 @@ async def logout(
         )
         
         logger.info(f"User {current_user.get('username')} logged out successfully - Request ID: {request_id}")
+        
+        # Track successful logout
+        BusinessMetrics.track_user_logout()
         
         return success_response(
             data={

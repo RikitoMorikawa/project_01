@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user, get_current_user_from_db, re
 from app.auth.decorators import require_resource_permission, Scopes
 from app.exceptions import NotFoundError, ConflictError, AuthorizationError
 from app.utils.response import success_response, error_response, paginated_response
+from app.utils.metrics import track_api_call, BusinessMetrics
 from app.dependencies import get_request_id
 
 router = APIRouter()
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_model=Dict[str, Any])
+@track_api_call("users_list")
 async def get_users(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Items per page"),
@@ -70,6 +72,7 @@ async def get_users(
 
 
 @router.post("/", response_model=Dict[str, Any])
+@track_api_call("users_create")
 async def create_user(
     user_data: UserCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
@@ -107,6 +110,9 @@ async def create_user(
         
         new_user = user_repo.create_user(create_data)
         
+        # Track user registration
+        BusinessMetrics.track_user_registration()
+        
         logger.info(f"User created successfully: {new_user['id']} - Request ID: {request_id}")
         
         return success_response(
@@ -133,6 +139,7 @@ async def create_user(
 
 
 @router.get("/{user_id}", response_model=Dict[str, Any])
+@track_api_call("users_get")
 async def get_user(
     user_id: int,
     include_profile: bool = Query(False, description="Include user profile information"),
@@ -187,6 +194,7 @@ async def get_user(
 
 
 @router.put("/{user_id}", response_model=Dict[str, Any])
+@track_api_call("users_update")
 async def update_user(
     user_id: int,
     user_data: UserUpdate,
@@ -251,6 +259,7 @@ async def update_user(
 
 
 @router.delete("/{user_id}", response_model=Dict[str, Any])
+@track_api_call("users_delete")
 async def delete_user(
     user_id: int,
     current_user: Dict[str, Any] = Depends(get_current_user),

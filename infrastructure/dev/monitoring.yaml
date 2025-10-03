@@ -1,0 +1,477 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Development Environment CloudWatch Monitoring and Alarms"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: dev
+    Description: 環境名
+
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: アラート通知用メールアドレス（オプション）
+
+  SlackWebhookUrl:
+    Type: String
+    Default: ""
+    Description: Slack Webhook URL（オプション）
+    NoEcho: true
+
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+  HasSlackWebhook: !Not [!Equals [!Ref SlackWebhookUrl, ""]]
+
+Resources:
+  # SNS トピック（アラート通知用）
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-alerts"
+      DisplayName: !Sub "${ProjectName} ${Environment} Alerts"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-alerts"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # メール通知サブスクリプション
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasNotificationEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # Lambda 関数監視用 CloudWatch アラーム
+  LambdaErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-error-rate"
+      AlarmDescription: "Lambda 関数のエラー率が高い場合にアラート"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-lambda-function-name"
+      AlarmActions:
+        - !Ref AlertTopic
+      OKActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-error-rate"
+        - Key: Environment
+          Value: !Ref Environment
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-duration"
+      AlarmDescription: "Lambda 関数の実行時間が長い場合にアラート"
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 25000 # 25秒（タイムアウト30秒の83%）
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-lambda-function-name"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-duration"
+        - Key: Environment
+          Value: !Ref Environment
+
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-throttles"
+      AlarmDescription: "Lambda 関数がスロットルされた場合にアラート"
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-lambda-function-name"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-throttles"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # API Gateway 監視用 CloudWatch アラーム
+  ApiGateway4xxErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-4xx-errors"
+      AlarmDescription: "API Gateway の 4xx エラー率が高い場合にアラート"
+      MetricName: 4XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-4xx-errors"
+        - Key: Environment
+          Value: !Ref Environment
+
+  ApiGateway5xxErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-5xx-errors"
+      AlarmDescription: "API Gateway の 5xx エラー率が高い場合にアラート"
+      MetricName: 5XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-5xx-errors"
+        - Key: Environment
+          Value: !Ref Environment
+
+  ApiGatewayLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-latency"
+      AlarmDescription: "API Gateway のレスポンス時間が長い場合にアラート"
+      MetricName: Latency
+      Namespace: AWS/ApiGateway
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5000 # 5秒
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-latency"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Aurora データベース監視用 CloudWatch アラーム
+  DatabaseCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-cpu-utilization"
+      AlarmDescription: "Aurora データベースの CPU 使用率が高い場合にアラート"
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-cpu-utilization"
+        - Key: Environment
+          Value: !Ref Environment
+
+  DatabaseConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-connections"
+      AlarmDescription: "Aurora データベースの接続数が多い場合にアラート"
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80 # t3.small の最大接続数の80%
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-connections"
+        - Key: Environment
+          Value: !Ref Environment
+
+  DatabaseReadLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-read-latency"
+      AlarmDescription: "Aurora データベースの読み取りレイテンシが高い場合にアラート"
+      MetricName: ReadLatency
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0.2 # 200ms
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-read-latency"
+        - Key: Environment
+          Value: !Ref Environment
+
+  DatabaseWriteLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-write-latency"
+      AlarmDescription: "Aurora データベースの書き込みレイテンシが高い場合にアラート"
+      MetricName: WriteLatency
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0.2 # 200ms
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-write-latency"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudFront 監視用 CloudWatch アラーム（開発環境では無効化可能）
+  CloudFrontErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudfront-error-rate"
+      AlarmDescription: "CloudFront のエラー率が高い場合にアラート"
+      MetricName: ErrorRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5 # 5%
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudfront-distribution-id"
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-error-rate"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # カスタムメトリクス用 CloudWatch ログ グループ
+  ApplicationMetricsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-custom-metrics"
+      RetentionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-custom-metrics"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Slack 通知用 Lambda 関数（オプション）
+  SlackNotificationFunction:
+    Type: AWS::Lambda::Function
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-slack-notification"
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt SlackNotificationRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+      Code:
+        ZipFile: |
+          import json
+          import urllib3
+          import os
+
+          def lambda_handler(event, context):
+              """SNS メッセージを Slack に転送する"""
+              
+              webhook_url = os.environ['SLACK_WEBHOOK_URL']
+              project_name = os.environ['PROJECT_NAME']
+              environment = os.environ['ENVIRONMENT']
+              
+              # SNS メッセージを解析
+              message = json.loads(event['Records'][0]['Sns']['Message'])
+              alarm_name = message.get('AlarmName', 'Unknown')
+              new_state = message.get('NewStateValue', 'Unknown')
+              reason = message.get('NewStateReason', 'No reason provided')
+              
+              # Slack メッセージを構築
+              color = 'danger' if new_state == 'ALARM' else 'good'
+              emoji = '🚨' if new_state == 'ALARM' else '✅'
+              
+              slack_message = {
+                  'attachments': [{
+                      'color': color,
+                      'title': f'{emoji} {project_name} ({environment}) - {alarm_name}',
+                      'text': f'状態: {new_state}\n理由: {reason}',
+                      'footer': 'AWS CloudWatch',
+                      'ts': int(context.aws_request_id[:8], 16)
+                  }]
+              }
+              
+              # Slack に送信
+              http = urllib3.PoolManager()
+              response = http.request(
+                  'POST',
+                  webhook_url,
+                  body=json.dumps(slack_message),
+                  headers={'Content-Type': 'application/json'}
+              )
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Notification sent to Slack')
+              }
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-slack-notification"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Slack 通知用 Lambda 実行ロール
+  SlackNotificationRole:
+    Type: AWS::IAM::Role
+    Condition: HasSlackWebhook
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-slack-notification-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-slack-notification-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Slack 通知用 SNS サブスクリプション
+  SlackSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasSlackWebhook
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: lambda
+      Endpoint: !GetAtt SlackNotificationFunction.Arn
+
+  # Slack Lambda 実行権限
+  SlackLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Ref SlackNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref AlertTopic
+
+Outputs:
+  AlertTopicArn:
+    Description: アラート通知用 SNS トピック ARN
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-alert-topic-arn"
+
+  ApplicationMetricsLogGroupName:
+    Description: アプリケーションメトリクス用ログ グループ名
+    Value: !Ref ApplicationMetricsLogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-custom-metrics-log-group"
+
+  SlackNotificationFunctionArn:
+    Condition: HasSlackWebhook
+    Description: Slack 通知用 Lambda 関数 ARN
+    Value: !GetAtt SlackNotificationFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-slack-notification-function-arn"
+
+  MonitoringDashboardUrl:
+    Description: CloudWatch ダッシュボード URL（手動作成後に更新）
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-${Environment}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-dashboard-url"
