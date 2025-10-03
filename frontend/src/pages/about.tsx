@@ -196,7 +196,7 @@ export default function About() {
                 variant="secondary"
                 size="lg"
                 onClick={() => (window.location.href = "/login")}
-                className="bg-white text-blue-600 hover:bg-gray-100 px-8 py-4"
+                className=" text-blue-600 hover:bg-gray-100 px-8 py-4"
               >
                 無料で始める
               </Button>

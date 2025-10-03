@@ -1,0 +1,1008 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Enhanced Production Monitoring, Alerting, and Observability"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: 環境名
+
+  NotificationEmail:
+    Type: String
+    Description: アラート通知用メールアドレス（必須）
+
+  SlackWebhookUrl:
+    Type: String
+    Default: ""
+    Description: Slack Webhook URL（オプション）
+    NoEcho: true
+
+  PagerDutyIntegrationKey:
+    Type: String
+    Default: ""
+    Description: PagerDuty Integration Key（オプション）
+    NoEcho: true
+
+  OpsGenieApiKey:
+    Type: String
+    Default: ""
+    Description: OpsGenie API Key（オプション）
+    NoEcho: true
+
+  SeverityThresholds:
+    Type: CommaDelimitedList
+    Default: "1,5,10,20"
+    Description: "アラート重要度しきい値 (Critical,High,Medium,Low)"
+
+Conditions:
+  HasSlackWebhook: !Not [!Equals [!Ref SlackWebhookUrl, ""]]
+  HasPagerDuty: !Not [!Equals [!Ref PagerDutyIntegrationKey, ""]]
+  HasOpsGenie: !Not [!Equals [!OpsGenieApiKey , ""]]
+
+Resources:
+  # Enhanced SNS Topics（重要度別）
+  CriticalAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-critical-alerts"
+      DisplayName: !Sub "${ProjectName} ${Environment} Critical Alerts"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-critical-alerts"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Critical
+
+  HighAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-high-alerts"
+      DisplayName: !Sub "${ProjectName} ${Environment} High Priority Alerts"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-high-alerts"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: High
+
+  MediumAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-medium-alerts"
+      DisplayName: !Sub "${ProjectName} ${Environment} Medium Priority Alerts"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-medium-alerts"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Medium
+
+  LowAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Environment}-low-alerts"
+      DisplayName: !Sub "${ProjectName} ${Environment} Low Priority Alerts"
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-low-alerts"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Low
+
+  # メール通知サブスクリプション（重要度別）
+  CriticalEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref CriticalAlertTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  HighEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref HighAlertTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  MediumEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref MediumAlertTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # Enhanced Lambda Function Monitoring（本番環境用厳格監視）
+  LambdaCriticalErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-critical-errors"
+      AlarmDescription: "Lambda 関数でクリティカルエラーが発生（本番環境）"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 60 # 1分間隔で監視
+      EvaluationPeriods: 1
+      Threshold: !Select [0, !Ref SeverityThresholds] # Critical: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-enhanced-lambda-function-name"
+      AlarmActions:
+        - !Ref CriticalAlertTopic
+      OKActions:
+        - !Ref CriticalAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-critical-errors"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Critical
+
+  LambdaHighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-high-error-rate"
+      AlarmDescription: "Lambda 関数のエラー率が高い（本番環境）"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: !Select [1, !Ref SeverityThresholds] # High: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-enhanced-lambda-function-name"
+      AlarmActions:
+        - !Ref HighAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-high-error-rate"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: High
+
+  LambdaPerformanceDegradationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-performance-degradation"
+      AlarmDescription: "Lambda 関数のパフォーマンス劣化（本番環境）"
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 15000 # 15秒
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-enhanced-lambda-function-name"
+      AlarmActions:
+        - !Ref MediumAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-performance-degradation"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Medium
+
+  LambdaMemoryUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-memory-utilization"
+      AlarmDescription: "Lambda 関数のメモリ使用率が高い（本番環境）"
+      MetricName: MemoryUtilization
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 85 # 85%
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-enhanced-lambda-function-name"
+      AlarmActions:
+        - !Ref MediumAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-memory-utilization"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Medium
+
+  # Enhanced API Gateway Monitoring（本番環境用）
+  ApiGatewayCritical5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-critical-5xx-errors"
+      AlarmDescription: "API Gateway でクリティカルな 5xx エラーが発生（本番環境）"
+      MetricName: 5XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: !Select [0, !Ref SeverityThresholds] # Critical: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref CriticalAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-critical-5xx-errors"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Critical
+
+  ApiGatewayHighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-high-latency"
+      AlarmDescription: "API Gateway のレスポンス時間が異常に長い（本番環境）"
+      MetricName: Latency
+      Namespace: AWS/ApiGateway
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5000 # 5秒
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref HighAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-high-latency"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: High
+
+  ApiGatewayThroughputAnomalyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-api-throughput-anomaly"
+      AlarmDescription: "API Gateway のスループットに異常が検出された（本番環境）"
+      MetricName: Count
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1000 # 5分間で1000リクエスト以上
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "${ProjectName}-${Environment}-api"
+        - Name: Stage
+          Value: v1
+      AlarmActions:
+        - !Ref MediumAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-api-throughput-anomaly"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Medium
+
+  # Enhanced Database Monitoring（本番環境用）
+  DatabaseCriticalCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-critical-cpu"
+      AlarmDescription: "Aurora データベースの CPU 使用率がクリティカルレベル（本番環境）"
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 90 # 90%
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref CriticalAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-critical-cpu"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Critical
+
+  DatabaseConnectionLeakAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-connection-leak"
+      AlarmDescription: "Aurora データベースの接続リークが疑われる（本番環境）"
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 180 # t3.medium の最大接続数の90%
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref HighAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-connection-leak"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: High
+
+  DatabaseReplicationLagAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-db-replication-lag"
+      AlarmDescription: "Aurora リードレプリカのレプリケーション遅延（本番環境）"
+      MetricName: AuroraReplicaLag
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1000 # 1秒
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Sub "${ProjectName}-${Environment}-aurora-cluster"
+      AlarmActions:
+        - !Ref MediumAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-db-replication-lag"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Medium
+
+  # Enhanced CloudFront Monitoring（本番環境用）
+  CloudFrontCriticalErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudfront-critical-error-rate"
+      AlarmDescription: "CloudFront でクリティカルなエラー率（本番環境）"
+      MetricName: ErrorRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5 # 5%
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudfront-distribution-id"
+      AlarmActions:
+        - !Ref CriticalAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-critical-error-rate"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Critical
+
+  CloudFrontCacheEfficiencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-cloudfront-cache-efficiency"
+      AlarmDescription: "CloudFront のキャッシュ効率が低下（本番環境）"
+      MetricName: CacheHitRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 900 # 15分
+      EvaluationPeriods: 2
+      Threshold: 70 # 70%
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudfront-distribution-id"
+      AlarmActions:
+        - !Ref LowAlertTopic
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-cloudfront-cache-efficiency"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Severity
+          Value: Low
+
+  # Enhanced Custom Metrics（アプリケーション固有メトリクス）
+  ApplicationBusinessMetricsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-business-metrics"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-business-metrics"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: MetricType
+          Value: Business
+
+  # ビジネスメトリクス用メトリクスフィルター
+  UserRegistrationMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationBusinessMetricsLogGroup
+      FilterPattern: '[timestamp, requestId, level, event="USER_REGISTRATION", ...]'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/Business"
+          MetricName: UserRegistrations
+          MetricValue: "1"
+          DefaultValue: 0
+
+  UserLoginMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationBusinessMetricsLogGroup
+      FilterPattern: '[timestamp, requestId, level, event="USER_LOGIN", ...]'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/Business"
+          MetricName: UserLogins
+          MetricValue: "1"
+          DefaultValue: 0
+
+  ApiResponseTimeMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-enhanced-lambda-log-group-name"
+      FilterPattern: '[timestamp, requestId, level, message="API_RESPONSE_TIME", responseTime]'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/Performance"
+          MetricName: ApiResponseTime
+          MetricValue: "$responseTime"
+          DefaultValue: 0
+
+  # Enhanced Slack Notification Function（本番環境用）
+  EnhancedSlackNotificationFunction:
+    Type: AWS::Lambda::Function
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-enhanced-slack-notification"
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt EnhancedSlackNotificationRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          PROJECT_NAME: !Ref ProjectName
+          ENVIRONMENT: !Ref Environment
+          PAGERDUTY_INTEGRATION_KEY: !Ref PagerDutyIntegrationKey
+          OPSGENIE_API_KEY: !Ref OpsGenieApiKey
+      Code:
+        ZipFile: |
+          import json
+          import urllib3
+          import os
+          import boto3
+          from datetime import datetime
+
+          def lambda_handler(event, context):
+              """Enhanced SNS メッセージを複数の通知チャネルに転送（本番環境用）"""
+              
+              webhook_url = os.environ['SLACK_WEBHOOK_URL']
+              project_name = os.environ['PROJECT_NAME']
+              environment = os.environ['ENVIRONMENT']
+              pagerduty_key = os.environ.get('PAGERDUTY_INTEGRATION_KEY', '')
+              opsgenie_key = os.environ.get('OPSGENIE_API_KEY', '')
+              
+              # SNS メッセージを解析
+              sns_message = event['Records'][0]['Sns']
+              message = json.loads(sns_message['Message'])
+              topic_arn = sns_message['TopicArn']
+              
+              alarm_name = message.get('AlarmName', 'Unknown')
+              new_state = message.get('NewStateValue', 'Unknown')
+              old_state = message.get('OldStateValue', 'Unknown')
+              reason = message.get('NewStateReason', 'No reason provided')
+              timestamp = message.get('StateChangeTime', datetime.utcnow().isoformat())
+              
+              # 重要度を判定
+              severity = determine_severity(topic_arn, alarm_name)
+              color, emoji, urgency = get_alert_formatting(severity, new_state)
+              
+              # Slack メッセージを構築
+              slack_message = build_slack_message(
+                  emoji, urgency, project_name, environment, alarm_name, 
+                  new_state, old_state, reason, timestamp, color, severity
+              )
+              
+              # 通知を送信
+              results = []
+              
+              # Slack 通知
+              slack_result = send_slack_notification(webhook_url, slack_message)
+              results.append(('Slack', slack_result))
+              
+              # PagerDuty 通知（Critical/High のみ）
+              if pagerduty_key and severity in ['Critical', 'High']:
+                  pagerduty_result = send_pagerduty_notification(
+                      pagerduty_key, alarm_name, new_state, reason, severity
+                  )
+                  results.append(('PagerDuty', pagerduty_result))
+              
+              # OpsGenie 通知（Critical のみ）
+              if opsgenie_key and severity == 'Critical':
+                  opsgenie_result = send_opsgenie_notification(
+                      opsgenie_key, alarm_name, new_state, reason, severity
+                  )
+                  results.append(('OpsGenie', opsgenie_result))
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({
+                      'message': f'Enhanced notifications sent for {severity} alert',
+                      'results': results
+                  })
+              }
+
+          def determine_severity(topic_arn, alarm_name):
+              """トピック ARN とアラーム名から重要度を判定"""
+              if 'critical' in topic_arn.lower():
+                  return 'Critical'
+              elif 'high' in topic_arn.lower():
+                  return 'High'
+              elif 'medium' in topic_arn.lower():
+                  return 'Medium'
+              else:
+                  return 'Low'
+
+          def get_alert_formatting(severity, state):
+              """重要度と状態に基づいてフォーマットを決定"""
+              if state == 'ALARM':
+                  if severity == 'Critical':
+                      return 'danger', '🚨', '🔥 CRITICAL'
+                  elif severity == 'High':
+                      return 'warning', '⚠️', '🔴 HIGH'
+                  elif severity == 'Medium':
+                      return 'warning', '⚠️', '🟡 MEDIUM'
+                  else:
+                      return '#36a64f', 'ℹ️', '🔵 LOW'
+              else:
+                  return 'good', '✅', '✅ RESOLVED'
+
+          def build_slack_message(emoji, urgency, project_name, environment, 
+                                alarm_name, new_state, old_state, reason, 
+                                timestamp, color, severity):
+              """Slack メッセージを構築"""
+              return {
+                  'attachments': [{
+                      'color': color,
+                      'title': f'{emoji} {urgency} - {project_name} ({environment})',
+                      'fields': [
+                          {
+                              'title': 'アラーム名',
+                              'value': alarm_name,
+                              'short': True
+                          },
+                          {
+                              'title': '重要度',
+                              'value': severity,
+                              'short': True
+                          },
+                          {
+                              'title': '状態変化',
+                              'value': f'{old_state} → {new_state}',
+                              'short': True
+                          },
+                          {
+                              'title': '発生時刻',
+                              'value': timestamp,
+                              'short': True
+                          },
+                          {
+                              'title': '理由',
+                              'value': reason,
+                              'short': False
+                          }
+                      ],
+                      'footer': 'AWS CloudWatch - Enhanced Production Monitoring',
+                      'ts': int(datetime.now().timestamp())
+                  }]
+              }
+
+          def send_slack_notification(webhook_url, message):
+              """Slack に通知を送信"""
+              try:
+                  http = urllib3.PoolManager()
+                  response = http.request(
+                      'POST',
+                      webhook_url,
+                      body=json.dumps(message),
+                      headers={'Content-Type': 'application/json'}
+                  )
+                  return {'status': 'success', 'code': response.status}
+              except Exception as e:
+                  return {'status': 'error', 'error': str(e)}
+
+          def send_pagerduty_notification(integration_key, alarm_name, state, reason, severity):
+              """PagerDuty に通知を送信"""
+              try:
+                  http = urllib3.PoolManager()
+                  payload = {
+                      'routing_key': integration_key,
+                      'event_action': 'trigger' if state == 'ALARM' else 'resolve',
+                      'dedup_key': f'aws-alarm-{alarm_name}',
+                      'payload': {
+                          'summary': f'{severity}: {alarm_name}',
+                          'source': 'AWS CloudWatch',
+                          'severity': severity.lower(),
+                          'custom_details': {
+                              'alarm_name': alarm_name,
+                              'state': state,
+                              'reason': reason
+                          }
+                      }
+                  }
+                  
+                  response = http.request(
+                      'POST',
+                      'https://events.pagerduty.com/v2/enqueue',
+                      body=json.dumps(payload),
+                      headers={'Content-Type': 'application/json'}
+                  )
+                  return {'status': 'success', 'code': response.status}
+              except Exception as e:
+                  return {'status': 'error', 'error': str(e)}
+
+          def send_opsgenie_notification(api_key, alarm_name, state, reason, severity):
+              """OpsGenie に通知を送信"""
+              try:
+                  http = urllib3.PoolManager()
+                  payload = {
+                      'message': f'{severity}: {alarm_name}',
+                      'description': reason,
+                      'priority': 'P1' if severity == 'Critical' else 'P2',
+                      'source': 'AWS CloudWatch',
+                      'tags': ['aws', 'cloudwatch', 'production']
+                  }
+                  
+                  response = http.request(
+                      'POST',
+                      'https://api.opsgenie.com/v2/alerts',
+                      body=json.dumps(payload),
+                      headers={
+                          'Content-Type': 'application/json',
+                          'Authorization': f'GenieKey {api_key}'
+                      }
+                  )
+                  return {'status': 'success', 'code': response.status}
+              except Exception as e:
+                  return {'status': 'error', 'error': str(e)}
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-enhanced-slack-notification"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: NotificationType
+          Value: Enhanced
+
+  # Enhanced Slack 通知用 Lambda 実行ロール
+  EnhancedSlackNotificationRole:
+    Type: AWS::IAM::Role
+    Condition: HasSlackWebhook
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-enhanced-slack-notification-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EnhancedNotificationAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-${Environment}-*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-enhanced-slack-notification-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Enhanced SNS サブスクリプション（重要度別）
+  CriticalSlackSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasSlackWebhook
+    Properties:
+      TopicArn: !Ref CriticalAlertTopic
+      Protocol: lambda
+      Endpoint: !GetAtt EnhancedSlackNotificationFunction.Arn
+
+  HighSlackSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasSlackWebhook
+    Properties:
+      TopicArn: !Ref HighAlertTopic
+      Protocol: lambda
+      Endpoint: !GetAtt EnhancedSlackNotificationFunction.Arn
+
+  MediumSlackSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasSlackWebhook
+    Properties:
+      TopicArn: !Ref MediumAlertTopic
+      Protocol: lambda
+      Endpoint: !GetAtt EnhancedSlackNotificationFunction.Arn
+
+  # Enhanced Lambda 実行権限（重要度別）
+  CriticalSlackLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Ref EnhancedSlackNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref CriticalAlertTopic
+
+  HighSlackLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Ref EnhancedSlackNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref HighAlertTopic
+
+  MediumSlackLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Ref EnhancedSlackNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref MediumAlertTopic
+
+  # Enhanced CloudWatch Dashboard（本番環境用総合ダッシュボード）
+  EnhancedProductionDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "${ProjectName}-${Environment}-enhanced-dashboard"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-${Environment}-enhanced-api", { "stat": "Average" } ],
+                  [ ".", "Errors", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "Invocations", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "Throttles", ".", ".", { "stat": "Sum" } ],
+                  [ ".", "ConcurrentExecutions", ".", ".", { "stat": "Maximum" } ],
+                  [ ".", "ProvisionedConcurrencyUtilization", ".", ".", { "stat": "Average" } ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Lambda Performance Metrics (Enhanced)",
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "Count", "ApiName", "${ProjectName}-${Environment}-api", "Stage", "v1" ],
+                  [ ".", "4XXError", ".", ".", ".", "." ],
+                  [ ".", "5XXError", ".", ".", ".", "." ],
+                  [ ".", "Latency", ".", ".", ".", ".", { "stat": "Average" } ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "API Gateway Metrics (Enhanced)",
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/RDS", "CPUUtilization", "DBClusterIdentifier", "${ProjectName}-${Environment}-aurora-cluster" ],
+                  [ ".", "DatabaseConnections", ".", "." ],
+                  [ ".", "ReadLatency", ".", ".", { "stat": "Average" } ],
+                  [ ".", "WriteLatency", ".", ".", { "stat": "Average" } ],
+                  [ ".", "FreeableMemory", ".", ".", { "stat": "Average" } ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Aurora Database Metrics (Enhanced)",
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/CloudFront", "Requests", "DistributionId", "${ProjectName}-${Environment}-cloudfront-distribution" ],
+                  [ ".", "BytesDownloaded", ".", "." ],
+                  [ ".", "ErrorRate", ".", ".", { "stat": "Average" } ],
+                  [ ".", "CacheHitRate", ".", ".", { "stat": "Average" } ],
+                  [ ".", "OriginLatency", ".", ".", { "stat": "Average" } ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "CloudFront Metrics (Enhanced)",
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "${ProjectName}/${Environment}/Business", "UserRegistrations" ],
+                  [ ".", "UserLogins" ],
+                  [ "${ProjectName}/${Environment}/Performance", "ApiResponseTime", { "stat": "Average" } ],
+                  [ "${ProjectName}/${Environment}/Lambda", "ApplicationErrors" ],
+                  [ ".", "ColdStarts" ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "Custom Business & Performance Metrics",
+                "yAxis": {
+                  "left": {
+                    "min": 0
+                  }
+                }
+              }
+            }
+          ]
+        }
+
+Outputs:
+  CriticalAlertTopicArn:
+    Description: クリティカルアラート通知用 SNS トピック ARN
+    Value: !Ref CriticalAlertTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-critical-alert-topic-arn"
+
+  HighAlertTopicArn:
+    Description: 高優先度アラート通知用 SNS トピック ARN
+    Value: !Ref HighAlertTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-high-alert-topic-arn"
+
+  MediumAlertTopicArn:
+    Description: 中優先度アラート通知用 SNS トピック ARN
+    Value: !Ref MediumAlertTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-medium-alert-topic-arn"
+
+  LowAlertTopicArn:
+    Description: 低優先度アラート通知用 SNS トピック ARN
+    Value: !Ref LowAlertTopic
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-low-alert-topic-arn"
+
+  EnhancedSlackNotificationFunctionArn:
+    Condition: HasSlackWebhook
+    Description: Enhanced Slack 通知用 Lambda 関数 ARN
+    Value: !GetAtt EnhancedSlackNotificationFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-enhanced-slack-notification-function-arn"
+
+  BusinessMetricsLogGroupName:
+    Description: ビジネスメトリクス用ログ グループ名
+    Value: !Ref ApplicationBusinessMetricsLogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-business-metrics-log-group"
+
+  EnhancedDashboardUrl:
+    Description: Enhanced CloudWatch ダッシュボード URL
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProjectName}-${Environment}-enhanced-dashboard"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-enhanced-dashboard-url"
+
+  MonitoringMetricsNamespace:
+    Description: カスタムメトリクス名前空間
+    Value: !Sub "${ProjectName}/${Environment}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-monitoring-metrics-namespace"

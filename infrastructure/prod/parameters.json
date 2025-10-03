@@ -1,16 +1,83 @@
 {
   "Environment": "prod",
+  "ProjectName": "csr-lambda-api",
+
   "DatabaseInstanceClass": "db.t3.medium",
   "DatabaseMultiAZ": true,
-  "LambdaMemorySize": 1024,
-  "LambdaProvisionedConcurrency": 10,
-  "CloudFrontEnabled": true,
-  "WAFEnabled": true,
-  "DatabaseName": "csr_lambda_prod",
   "DatabaseReadReplica": true,
+  "DatabaseName": "csr_lambda_prod",
+  "DatabaseUsername": "admin",
+  "DatabaseBackupRetentionPeriod": 30,
+  "DatabasePreferredBackupWindow": "03:00-04:00",
+  "DatabasePreferredMaintenanceWindow": "sun:04:00-sun:05:00",
+
+  "LambdaMemorySize": 1024,
+  "LambdaTimeout": 30,
+  "LambdaReservedConcurrency": 500,
+  "LambdaProvisionedConcurrency": 10,
+  "LambdaProvisionedConcurrencyMax": 50,
+  "LambdaProvisionedConcurrencyMin": 5,
+  "AutoScalingTargetUtilization": 70,
+
+  "CloudFrontEnabled": true,
+  "CloudFrontPriceClass": "PriceClass_All",
+  "CloudFrontMinTTL": 0,
+  "CloudFrontDefaultTTL": 86400,
+  "CloudFrontMaxTTL": 31536000,
+
+  "WAFEnabled": true,
+  "WAFRateLimitPerMinute": 2000,
+  "WAFBlockedCountries": ["CN", "RU"],
+
   "VpcCidr": "10.2.0.0/16",
   "PublicSubnet1Cidr": "10.2.1.0/24",
   "PublicSubnet2Cidr": "10.2.2.0/24",
   "PrivateSubnet1Cidr": "10.2.3.0/24",
-  "PrivateSubnet2Cidr": "10.2.4.0/24"
+  "PrivateSubnet2Cidr": "10.2.4.0/24",
+  "AvailabilityZone1": "ap-northeast-1a",
+  "AvailabilityZone2": "ap-northeast-1c",
+
+  "NotificationEmail": "admin@example.com",
+  "SlackWebhookUrl": "",
+  "PagerDutyIntegrationKey": "",
+  "OpsGenieApiKey": "",
+  "SeverityThresholds": "1,5,10,20",
+
+  "LambdaCodeS3Bucket": "csr-lambda-api-prod-lambda-code",
+  "FrontendCodeS3Bucket": "csr-lambda-api-prod-frontend-code",
+
+  "EnableVPCFlowLogs": true,
+  "EnableCloudTrail": true,
+  "EnableGuardDuty": true,
+  "EnableSecurityHub": true,
+
+  "CostOptimizationEnabled": true,
+  "ResourceTaggingEnforced": true,
+  "ComplianceMode": "PRODUCTION",
+
+  "BackupEnabled": true,
+  "BackupRetentionDays": 30,
+  "PointInTimeRecoveryEnabled": true,
+  "CrossRegionBackupEnabled": false,
+
+  "PerformanceInsightsEnabled": true,
+  "PerformanceInsightsRetentionPeriod": 7,
+  "EnhancedMonitoringInterval": 60,
+
+  "AutoMinorVersionUpgrade": false,
+  "DeletionProtection": true,
+  "StorageEncrypted": true,
+
+  "ApiGatewayThrottleBurstLimit": 1000,
+  "ApiGatewayThrottleRateLimit": 500,
+  "ApiGatewayCachingEnabled": true,
+  "ApiGatewayCacheTtlInSeconds": 300,
+
+  "CloudWatchLogRetentionDays": 90,
+  "XRayTracingEnabled": true,
+  "XRaySamplingRate": 0.1,
+
+  "MaintenanceWindowStart": "03:00",
+  "MaintenanceWindowEnd": "05:00",
+  "MaintenanceWindowTimezone": "Asia/Tokyo"
 }

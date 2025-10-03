@@ -1,0 +1,566 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CSR Lambda API System - Enhanced Production Lambda Configuration with Provisioned Concurrency and Auto Scaling"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csr-lambda-api
+    Description: プロジェクト名
+
+  Environment:
+    Type: String
+    Default: prod
+    Description: 環境名
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 512
+    MaxValue: 3008
+    Description: Lambda メモリサイズ (MB) - 本番環境用
+
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+    MinValue: 3
+    MaxValue: 900
+    Description: Lambda タイムアウト (秒)
+
+  LambdaReservedConcurrency:
+    Type: Number
+    Default: 500
+    MinValue: 100
+    MaxValue: 1000
+    Description: Lambda 予約済み同時実行数
+
+  LambdaProvisionedConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: Lambda Provisioned Concurrency 初期値
+
+  LambdaProvisionedConcurrencyMax:
+    Type: Number
+    Default: 50
+    MinValue: 10
+    MaxValue: 200
+    Description: Lambda Provisioned Concurrency 最大値
+
+  LambdaProvisionedConcurrencyMin:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 50
+    Description: Lambda Provisioned Concurrency 最小値
+
+  AutoScalingTargetUtilization:
+    Type: Number
+    Default: 70
+    MinValue: 50
+    MaxValue: 90
+    Description: Auto Scaling ターゲット使用率 (%)
+
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: Lambda コードが格納されている S3 バケット名
+
+  LambdaCodeS3Key:
+    Type: String
+    Default: lambda-deployment-package.zip
+    Description: Lambda デプロイメントパッケージの S3 キー
+
+Conditions:
+  EnableProvisionedConcurrency: !Not [!Equals [!Ref LambdaProvisionedConcurrency, 0]]
+
+Resources:
+  # Enhanced Lambda 実行ロール（本番環境用権限強化）
+  EnhancedLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-enhanced-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: EnhancedDatabaseAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusterEndpoints
+                  - rds-db:connect
+                Resource: "*"
+        - PolicyName: EnhancedSecretsManagerAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:ListSecrets
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}-${Environment}-*"
+        - PolicyName: EnhancedCloudWatchAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
+        - PolicyName: EnhancedParameterStoreAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:PutParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/*"
+        - PolicyName: EnhancedKMSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                Resource:
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-database-kms-key-id"
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+        - PolicyName: EnhancedSNSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-alert-topic-arn"
+                  - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-warning-topic-arn"
+        - PolicyName: EnhancedApplicationAutoScalingAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - application-autoscaling:RegisterScalableTarget
+                  - application-autoscaling:DescribeScalableTargets
+                  - application-autoscaling:PutScalingPolicy
+                  - application-autoscaling:DescribeScalingPolicies
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-enhanced-lambda-role"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: Production
+
+  # Enhanced Lambda 関数（本番環境用最適化）
+  EnhancedApiLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-enhanced-api"
+      Runtime: python3.11
+      Handler: lambda_handler.handler
+      Role: !GetAtt EnhancedLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      ReservedConcurrencyLimit: !Ref LambdaReservedConcurrency
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-lambda-sg-id"
+        SubnetIds:
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-private-subnet-1-id"
+          - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-private-subnet-2-id"
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DATABASE_HOST:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-cluster-endpoint"
+          DATABASE_READ_HOST:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-cluster-read-endpoint"
+          DATABASE_PORT:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-port"
+          DATABASE_NAME:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-name"
+          DATABASE_SECRET_ARN:
+            Fn::ImportValue: !Sub "${ProjectName}-${Environment}-db-secret-arn"
+          PYTHONPATH: /var/runtime
+          LOG_LEVEL: INFO
+          CORS_ORIGINS: "*"
+          AWS_XRAY_TRACING_NAME: !Sub "${ProjectName}-${Environment}-enhanced-api"
+          CONNECTION_POOL_SIZE: "20"
+          CONNECTION_POOL_MAX_OVERFLOW: "30"
+          CONNECTION_POOL_TIMEOUT: "30"
+          CONNECTION_POOL_RECYCLE: "3600"
+          ENABLE_XRAY_TRACING: "true"
+          ENABLE_CLOUDWATCH_METRICS: "true"
+          ENABLE_STRUCTURED_LOGGING: "true"
+          METRICS_NAMESPACE: "CSR-Lambda-API/Production"
+          LAMBDA_MEMORY_SIZE: !Ref LambdaMemorySize
+          LAMBDA_TIMEOUT: !Ref LambdaTimeout
+          AUTO_SCALING_ENABLED: "true"
+          PERFORMANCE_MONITORING_ENABLED: "true"
+      TracingConfig:
+        Mode: Active
+      DeadLetterConfig:
+        TargetArn: !GetAtt EnhancedLambdaDeadLetterQueue.Arn
+      KMSKeyArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-enhanced-api"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: CostCenter
+          Value: Production
+        - Key: AutoScaling
+          Value: Enabled
+
+  # Lambda バージョン（本番環境用）
+  EnhancedApiLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref EnhancedApiLambdaFunction
+      Description: !Sub "Enhanced version for ${Environment} environment with auto-scaling"
+
+  # Lambda エイリアス（本番環境用）
+  EnhancedApiLambdaAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref EnhancedApiLambdaFunction
+      FunctionVersion: !GetAtt EnhancedApiLambdaVersion.Version
+      Name: !Sub "${Environment}-enhanced"
+      Description: !Sub "Enhanced alias for ${Environment} environment with Provisioned Concurrency"
+
+  # Lambda Provisioned Concurrency Configuration（本番環境用）
+  LambdaProvisionedConcurrencyConfig:
+    Type: AWS::Lambda::ProvisionedConcurrencyConfig
+    Condition: EnableProvisionedConcurrency
+    Properties:
+      FunctionName: !Ref EnhancedApiLambdaFunction
+      Qualifier: !Ref EnhancedApiLambdaAlias
+      ProvisionedConcurrencyLimit: !Ref LambdaProvisionedConcurrency
+
+  # Application Auto Scaling Target（Provisioned Concurrency用）
+  LambdaScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Condition: EnableProvisionedConcurrency
+    Properties:
+      ServiceNamespace: lambda
+      ResourceId: !Sub "function:${EnhancedApiLambdaFunction}:${EnhancedApiLambdaAlias}"
+      ScalableDimension: lambda:provisioned-concurrency:utilization
+      MinCapacity: !Ref LambdaProvisionedConcurrencyMin
+      MaxCapacity: !Ref LambdaProvisionedConcurrencyMax
+      RoleARN: !GetAtt ApplicationAutoScalingRole.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-scalable-target"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Application Auto Scaling Policy（Provisioned Concurrency用）
+  LambdaScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Condition: EnableProvisionedConcurrency
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${Environment}-lambda-scaling-policy"
+      PolicyType: TargetTrackingScaling
+      ServiceNamespace: lambda
+      ResourceId: !Sub "function:${EnhancedApiLambdaFunction}:${EnhancedApiLambdaAlias}"
+      ScalableDimension: lambda:provisioned-concurrency:utilization
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref AutoScalingTargetUtilization
+        PredefinedMetricSpecification:
+          PredefinedMetricType: LambdaProvisionedConcurrencyUtilization
+        ScaleOutCooldown: 300 # 5分
+        ScaleInCooldown: 900 # 15分
+
+  # Application Auto Scaling Role
+  ApplicationAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-autoscaling-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaProvisionedConcurrencyScaling
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:PutProvisionedConcurrencyConfig
+                  - lambda:GetProvisionedConcurrencyConfig
+                  - lambda:DeleteProvisionedConcurrencyConfig
+                  - lambda:GetFunction
+                  - lambda:GetAlias
+                Resource: !Sub "${EnhancedApiLambdaFunction}:*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-autoscaling-role"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Enhanced Lambda Dead Letter Queue（本番環境用）
+  EnhancedLambdaDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-${Environment}-enhanced-lambda-dlq"
+      MessageRetentionPeriod: 1209600 # 14 days
+      VisibilityTimeoutSeconds: 300
+      ReceiveMessageWaitTimeSeconds: 20
+      KmsMasterKeyId: alias/aws/sqs
+      RedriveAllowPolicy:
+        redrivePermission: allowAll
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-enhanced-lambda-dlq"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: DeadLetterQueue
+
+  # DLQ アラーム（本番環境用）
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-dlq-messages"
+      AlarmDescription: "Lambda Dead Letter Queue にメッセージが蓄積された場合のアラート"
+      MetricName: ApproximateNumberOfVisibleMessages
+      Namespace: AWS/SQS
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt EnhancedLambdaDeadLetterQueue.QueueName
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-alert-topic-arn"
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-dlq-alarm"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Enhanced Lambda ログ グループ（本番環境用）
+  EnhancedApiLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-${Environment}-enhanced-api"
+      RetentionInDays: 90
+      KmsKeyId:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-cloudwatch-logs-kms-key-id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-enhanced-api-logs"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: LogType
+          Value: Application
+
+  # Lambda パフォーマンス監視用カスタムメトリクス
+  LambdaPerformanceMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref EnhancedApiLambdaLogGroup
+      FilterPattern: '[timestamp, requestId, level="ERROR", ...]'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/Lambda"
+          MetricName: ApplicationErrors
+          MetricValue: "1"
+          DefaultValue: 0
+
+  # Lambda コールドスタート監視用メトリクス
+  LambdaColdStartMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref EnhancedApiLambdaLogGroup
+      FilterPattern: '[timestamp, requestId, level, message="INIT_START", ...]'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${ProjectName}/${Environment}/Lambda"
+          MetricName: ColdStarts
+          MetricValue: "1"
+          DefaultValue: 0
+
+  # Lambda パフォーマンス監視アラーム
+  LambdaColdStartAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-lambda-cold-starts"
+      AlarmDescription: "Lambda コールドスタートが頻発している場合のアラート"
+      MetricName: ColdStarts
+      Namespace: !Sub "${ProjectName}/${Environment}/Lambda"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-warning-topic-arn"
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-lambda-cold-starts"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Provisioned Concurrency 使用率監視アラーム
+  ProvisionedConcurrencyUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: EnableProvisionedConcurrency
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Environment}-provisioned-concurrency-utilization"
+      AlarmDescription: "Provisioned Concurrency の使用率が高い場合のアラート"
+      MetricName: ProvisionedConcurrencyUtilization
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref EnhancedApiLambdaFunction
+        - Name: Resource
+          Value: !Sub "${EnhancedApiLambdaFunction}:${EnhancedApiLambdaAlias}"
+      AlarmActions:
+        - Fn::ImportValue: !Sub "${ProjectName}-${Environment}-warning-topic-arn"
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-provisioned-concurrency-utilization"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Lambda 関数設定パラメータ（SSM Parameter Store）
+  LambdaConfigParameters:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${ProjectName}/${Environment}/lambda/config"
+      Type: String
+      Value: !Sub |
+        {
+          "memory_size": ${LambdaMemorySize},
+          "timeout": ${LambdaTimeout},
+          "reserved_concurrency": ${LambdaReservedConcurrency},
+          "provisioned_concurrency": ${LambdaProvisionedConcurrency},
+          "auto_scaling_enabled": true,
+          "auto_scaling_min": ${LambdaProvisionedConcurrencyMin},
+          "auto_scaling_max": ${LambdaProvisionedConcurrencyMax},
+          "auto_scaling_target": ${AutoScalingTargetUtilization}
+        }
+      Description: !Sub "${ProjectName} ${Environment} Lambda configuration parameters"
+      Tags:
+        Name: !Sub "${ProjectName}-${Environment}-lambda-config"
+        Environment: !Ref Environment
+
+Outputs:
+  EnhancedLambdaFunctionArn:
+    Description: Enhanced Lambda 関数 ARN
+    Value: !GetAtt EnhancedApiLambdaFunction.Arn
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-enhanced-lambda-function-arn"
+
+  EnhancedLambdaFunctionName:
+    Description: Enhanced Lambda 関数名
+    Value: !Ref EnhancedApiLambdaFunction
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-enhanced-lambda-function-name"
+
+  EnhancedLambdaAliasArn:
+    Description: Enhanced Lambda エイリアス ARN
+    Value: !Ref EnhancedApiLambdaAlias
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-enhanced-lambda-alias-arn"
+
+  LambdaProvisionedConcurrencyArn:
+    Condition: EnableProvisionedConcurrency
+    Description: Lambda Provisioned Concurrency Configuration ARN
+    Value: !Ref LambdaProvisionedConcurrencyConfig
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-provisioned-concurrency-arn"
+
+  LambdaScalableTargetId:
+    Condition: EnableProvisionedConcurrency
+    Description: Lambda Auto Scaling Target ID
+    Value: !Ref LambdaScalableTarget
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-scalable-target-id"
+
+  LambdaScalingPolicyArn:
+    Condition: EnableProvisionedConcurrency
+    Description: Lambda Auto Scaling Policy ARN
+    Value: !Ref LambdaScalingPolicy
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-scaling-policy-arn"
+
+  EnhancedLambdaLogGroupName:
+    Description: Enhanced Lambda ログ グループ名
+    Value: !Ref EnhancedApiLambdaLogGroup
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-enhanced-lambda-log-group-name"
+
+  DeadLetterQueueUrl:
+    Description: Lambda Dead Letter Queue URL
+    Value: !Ref EnhancedLambdaDeadLetterQueue
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-dlq-url"
+
+  LambdaConfigParameterName:
+    Description: Lambda 設定パラメータ名
+    Value: !Ref LambdaConfigParameters
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-config-parameter-name"
+
+  LambdaPerformanceMetrics:
+    Description: Lambda パフォーマンス監視メトリクス名前空間
+    Value: !Sub "${ProjectName}/${Environment}/Lambda"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-lambda-performance-metrics-namespace"
