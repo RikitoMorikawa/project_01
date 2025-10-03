@@ -126,8 +126,70 @@ aws cloudformation deploy --template-file infrastructure/dev/template.yml --stac
 
 ### テスト
 
-- フロントエンド: Jest + React Testing Library
-- バックエンド: pytest + FastAPI TestClient
+#### 包括的テストの実行
+
+最終統合テストと検証を実行するには、以下のスクリプトを使用してください：
+
+```bash
+# 基本的な実行
+./scripts/run_final_verification.sh
+
+# 本番環境URLを指定して実行
+./scripts/run_final_verification.sh --url https://your-api-domain.com
+
+# 軽量負荷テストで実行
+./scripts/run_final_verification.sh --light-load
+
+# 設定ファイルを指定して実行
+./scripts/run_final_verification.sh --config prod_test_config.json
+```
+
+#### 個別テストの実行
+
+**バックエンドテスト:**
+
+```bash
+cd backend
+
+# 単体テスト
+python -m pytest tests/unit/ -v
+
+# 統合テスト
+python -m pytest tests/integration/ -v
+
+# 本番環境ヘルスチェック
+python tests/production/test_production_health.py
+
+# パフォーマンステスト
+python tests/performance/load_test.py
+
+# セキュリティスキャン
+python tests/security/security_scanner.py
+```
+
+**フロントエンドテスト:**
+
+```bash
+cd frontend
+
+# 単体テスト
+npm test
+
+# E2E テスト
+npx playwright test
+
+# カバレッジ付きテスト
+npm test -- --coverage
+```
+
+#### テスト設定
+
+テスト設定は `test_config.json` ファイルで管理されています。環境変数での設定上書きも可能です：
+
+- `PRODUCTION_API_URL`: 本番環境の API URL
+- `PRODUCTION_API_KEY`: API 認証キー
+- `LOAD_TEST_USERS`: 負荷テストの同時ユーザー数
+- `LOAD_TEST_REQUESTS_PER_USER`: ユーザーあたりのリクエスト数
 
 ## トラブルシューティング
 

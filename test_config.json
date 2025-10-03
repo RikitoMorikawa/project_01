@@ -1,0 +1,47 @@
+{
+  "production_api_url": "https://your-production-api-domain.com",
+  "production_api_key": null,
+  "load_test_users": 10,
+  "load_test_requests_per_user": 50,
+  "load_test_ramp_up": 30,
+  "fail_fast": false,
+  "test_environments": {
+    "dev": {
+      "api_url": "https://dev-api-domain.com",
+      "frontend_url": "https://dev-frontend-domain.com"
+    },
+    "staging": {
+      "api_url": "https://staging-api-domain.com",
+      "frontend_url": "https://staging-frontend-domain.com"
+    },
+    "prod": {
+      "api_url": "https://prod-api-domain.com",
+      "frontend_url": "https://prod-frontend-domain.com"
+    }
+  },
+  "performance_thresholds": {
+    "avg_response_time_ms": 500,
+    "p95_response_time_ms": 1000,
+    "error_rate_percent": 1.0,
+    "min_throughput_rps": 10
+  },
+  "security_requirements": {
+    "min_security_score": 80,
+    "max_critical_issues": 0,
+    "max_high_issues": 2
+  },
+  "test_data": {
+    "sample_users": [
+      {
+        "email": "test1@example.com",
+        "username": "testuser1",
+        "password": "TestPassword123!"
+      },
+      {
+        "email": "test2@example.com",
+        "username": "testuser2",
+        "password": "TestPassword456!"
+      }
+    ]
+  }
+}
