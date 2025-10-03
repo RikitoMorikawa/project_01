@@ -282,7 +282,7 @@ class TestAuthUtilityFunctions:
         with pytest.raises(AuthenticationError) as exc_info:
             extract_token_from_header("")
         
-        assert "missing" in str(exc_info.value)
+        assert "missing" in str(exc_info.value) or "認証ヘッダーが提供されていません" in str(exc_info.value)
     
     def test_extract_token_from_header_invalid_format(self):
         """無効な認証ヘッダー形式のテスト / Test invalid authorization header format"""
@@ -290,20 +290,20 @@ class TestAuthUtilityFunctions:
         with pytest.raises(AuthenticationError) as exc_info:
             extract_token_from_header("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
         
-        assert "Invalid authorization header format" in str(exc_info.value)
+        assert "Invalid authorization header format" in str(exc_info.value) or "認証ヘッダーの形式が正しくありません" in str(exc_info.value)
         
         # 複数のスペースを含むヘッダー / Header with multiple spaces
         with pytest.raises(AuthenticationError) as exc_info:
             extract_token_from_header("Bearer token extra")
         
-        assert "Invalid authorization header format" in str(exc_info.value)
+        assert "Invalid authorization header format" in str(exc_info.value) or "認証ヘッダーの形式が正しくありません" in str(exc_info.value)
     
     def test_extract_token_from_header_wrong_scheme(self):
         """間違った認証スキームのテスト / Test wrong authentication scheme"""
         with pytest.raises(AuthenticationError) as exc_info:
             extract_token_from_header("Basic dXNlcjpwYXNzd29yZA==")
         
-        assert "Invalid authorization header format" in str(exc_info.value)
+        assert "Invalid authorization header format" in str(exc_info.value) or "認証ヘッダーの形式が正しくありません" in str(exc_info.value)
     
     def test_get_user_from_token_success(self, mock_cognito_token_claims):
         """トークンからのユーザー情報取得成功テスト / Test successful get user from token"""
