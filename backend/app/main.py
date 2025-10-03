@@ -154,6 +154,10 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["認証"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["ユーザー"])
 app.include_router(health.router, prefix="/api/v1/health", tags=["ヘルスチェック"])
 
+# データ保護・プライバシー関連ルーター
+from app.api.routes import consent
+app.include_router(consent.router, prefix="/api/v1", tags=["データ保護・同意管理"])
+
 @app.get("/")
 async def root():
     """

@@ -8,6 +8,7 @@
 import React, { useState } from "react";
 import { Form, Input, Button } from "@/components/ui";
 import PasswordStrengthIndicator from "./PasswordStrengthIndicator";
+import ConsentManager from "./ConsentManager";
 
 /**
  * 認証フォームのプロパティ
@@ -298,14 +299,16 @@ const AuthForm: React.FC<AuthFormProps> = ({
           </div>
         )}
 
-        {/* 利用規約同意（登録時のみ） */}
+        {/* 同意管理（登録時のみ） */}
         {type === "register" && (
-          <div className="flex items-center">
-            <input id="agree-terms" name="agree-terms" type="checkbox" required className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" />
-            <label htmlFor="agree-terms" className="ml-2 block text-sm text-gray-900">
-              利用規約とプライバシーポリシーに同意します
-            </label>
-          </div>
+          <ConsentManager
+            mode="registration"
+            requiredConsents={["privacy_policy", "terms_of_service"]}
+            onConsentChange={(consentType, consented) => {
+              // 同意状況をフォームデータに反映
+              console.log(`同意更新: ${consentType} = ${consented}`);
+            }}
+          />
         )}
       </Form>
 
