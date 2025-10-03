@@ -3,8 +3,11 @@ name: Deploy to Development
 on:
   push:
     branches: [develop]
-  pull_request:
-    branches: [develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
 
 env:
   AWS_REGION: ap-northeast-1

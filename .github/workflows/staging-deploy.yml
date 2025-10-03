@@ -3,6 +3,11 @@ name: Deploy to Staging
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
 
 env:
   AWS_REGION: ap-northeast-1
