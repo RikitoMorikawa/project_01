@@ -15,8 +15,6 @@ const nextConfig = {
   // 実験的機能
   experimental: {
     esmExternals: false,
-    // バンドル分析を有効化
-    bundlePagesRouterDependencies: true,
     // 最適化されたパッケージ
     optimizePackageImports: ["@aws-amplify/ui-react", "aws-amplify", "react-query", "axios"],
   },
@@ -126,47 +124,47 @@ const nextConfig = {
 
   // Environment-specific configuration
   env: {
-    NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL,
-    NEXT_PUBLIC_AWS_REGION: process.env.NEXT_PUBLIC_AWS_REGION,
-    NEXT_PUBLIC_COGNITO_USER_POOL_ID: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID,
-    NEXT_PUBLIC_COGNITO_CLIENT_ID: process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID,
+    NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || "https://api.example.com",
+    NEXT_PUBLIC_AWS_REGION: process.env.NEXT_PUBLIC_AWS_REGION || "ap-northeast-1",
+    NEXT_PUBLIC_COGNITO_USER_POOL_ID: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID || "ap-northeast-1_example",
+    NEXT_PUBLIC_COGNITO_CLIENT_ID: process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID || "example_client_id",
   },
 
-  // セキュリティヘッダー
-  async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          {
-            key: "X-Content-Type-Options",
-            value: "nosniff",
-          },
-          {
-            key: "X-Frame-Options",
-            value: "DENY",
-          },
-          {
-            key: "X-XSS-Protection",
-            value: "1; mode=block",
-          },
-          {
-            key: "Referrer-Policy",
-            value: "strict-origin-when-cross-origin",
-          },
-        ],
-      },
-      {
-        source: "/static/(.*)",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-        ],
-      },
-    ];
-  },
+  // セキュリティヘッダー（静的エクスポート時は無効）
+  // async headers() {
+  //   return [
+  //     {
+  //       source: "/(.*)",
+  //       headers: [
+  //         {
+  //           key: "X-Content-Type-Options",
+  //           value: "nosniff",
+  //         },
+  //         {
+  //           key: "X-Frame-Options",
+  //           value: "DENY",
+  //         },
+  //         {
+  //           key: "X-XSS-Protection",
+  //           value: "1; mode=block",
+  //         },
+  //         {
+  //           key: "Referrer-Policy",
+  //           value: "strict-origin-when-cross-origin",
+  //         },
+  //       ],
+  //     },
+  //     {
+  //       source: "/static/(.*)",
+  //       headers: [
+  //         {
+  //           key: "Cache-Control",
+  //           value: "public, max-age=31536000, immutable",
+  //         },
+  //       ],
+  //     },
+  //   ];
+  // },
 };
 
 module.exports = nextConfig;

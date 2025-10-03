@@ -287,7 +287,7 @@ const DataManagementPage: React.FC = () => {
                         </div>
                         <div>
                           <dt className="text-sm font-medium text-gray-500">アカウント作成日</dt>
-                          <dd className="text-sm text-gray-900">{user?.created_at ? new Date(user.created_at).toLocaleDateString("ja-JP") : "不明"}</dd>
+                          <dd className="text-sm text-gray-900">{user?.createdAt ? new Date(user.createdAt).toLocaleDateString("ja-JP") : "不明"}</dd>
                         </div>
                       </dl>
                     </div>
