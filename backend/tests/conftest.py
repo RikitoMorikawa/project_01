@@ -205,6 +205,20 @@ def mock_cognito_client():
     return MockCognitoClient()
 
 
+@pytest.fixture
+def mock_cloudwatch_metrics():
+    """CloudWatch メトリクスのモック / Mock CloudWatch metrics"""
+    with patch('app.utils.metrics.metrics') as mock_metrics:
+        # モックメトリクスコレクターを設定
+        mock_metrics._mock_mode = True
+        mock_metrics.put_metric = Mock()
+        mock_metrics.increment_counter = Mock()
+        mock_metrics.put_metrics_batch = Mock()
+        mock_metrics.add_to_buffer = Mock()
+        mock_metrics.flush_buffer = Mock()
+        yield mock_metrics
+
+
 @pytest.fixture(autouse=True)
 def setup_test_environment(monkeypatch):
     """テスト環境のセットアップ / Test environment setup"""
@@ -213,6 +227,8 @@ def setup_test_environment(monkeypatch):
     monkeypatch.setenv("COGNITO_USER_POOL_ID", "test-user-pool-id")
     monkeypatch.setenv("COGNITO_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-northeast-1")
+    monkeypatch.setenv("MOCK_CLOUDWATCH", "true")
     
     # 設定を再読み込み / Reload settings
     from app.config import settings

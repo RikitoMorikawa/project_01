@@ -7,6 +7,7 @@
 import boto3
 import time
 import logging
+import os
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from functools import wraps
@@ -26,8 +27,24 @@ class MetricsCollector:
             namespace: CloudWatch メトリクスの名前空間
         """
         self.namespace = namespace
-        self.cloudwatch = boto3.client('cloudwatch')
         self._metrics_buffer: List[Dict[str, Any]] = []
+        
+        # テスト環境や AWS 認証情報がない場合はモックモードで動作
+        if os.getenv('MOCK_CLOUDWATCH', '').lower() == 'true' or os.getenv('ENVIRONMENT') == 'test':
+            logger.info("テスト環境またはモックモードが有効、CloudWatch クライアントをモックで初期化")
+            self.cloudwatch = None
+            self._mock_mode = True
+        else:
+            try:
+                # AWS リージョンを環境変数から取得、デフォルトは ap-northeast-1
+                region = os.getenv('AWS_DEFAULT_REGION', 'ap-northeast-1')
+                self.cloudwatch = boto3.client('cloudwatch', region_name=region)
+                self._mock_mode = False
+                logger.info(f"CloudWatch クライアント初期化成功 (リージョン: {region})")
+            except Exception as e:
+                logger.warning(f"CloudWatch クライアント初期化失敗、モックモードで動作: {str(e)}")
+                self.cloudwatch = None
+                self._mock_mode = True
         
     def put_metric(
         self,
@@ -47,6 +64,10 @@ class MetricsCollector:
             dimensions: メトリクスのディメンション
             timestamp: メトリクスのタイムスタンプ
         """
+        if self._mock_mode:
+            logger.info(f"[MOCK] メトリクス送信: {metric_name} = {value} {unit} (dimensions: {dimensions})")
+            return
+            
         try:
             metric_data = {
                 'MetricName': metric_name,
@@ -80,6 +101,12 @@ class MetricsCollector:
         Args:
             metrics: メトリクスデータのリスト
         """
+        if self._mock_mode:
+            logger.info(f"[MOCK] バッチメトリクス送信: {len(metrics)}個のメトリクス")
+            for metric in metrics:
+                logger.debug(f"[MOCK] メトリクス: {metric}")
+            return
+            
         try:
             # CloudWatch は一度に最大20個のメトリクスを受け付ける
             batch_size = 20
