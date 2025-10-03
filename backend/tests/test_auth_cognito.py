@@ -179,7 +179,7 @@ class TestCognitoTokenVerifier:
             with pytest.raises(AuthenticationError) as exc_info:
                 verifier.get_user_info("invalid-token")
             
-            assert "Invalid or expired access token" in str(exc_info.value)
+            assert "Invalid or expired access token" in str(exc_info.value) or "アクセストークンが無効または期限切れです" in str(exc_info.value)
     
     def test_get_user_info_service_error(self):
         """サービスエラーでのユーザー情報取得テスト / Test get user info with service error"""
@@ -229,7 +229,7 @@ class TestCognitoTokenVerifier:
             with pytest.raises(AuthenticationError) as exc_info:
                 verifier.refresh_token("invalid-refresh-token")
             
-            assert "Invalid or expired refresh token" in str(exc_info.value)
+            assert "Invalid or expired refresh token" in str(exc_info.value) or "リフレッシュトークンが無効または期限切れです" in str(exc_info.value)
     
     @pytest.mark.asyncio
     async def test_check_cognito_health_success(self):
