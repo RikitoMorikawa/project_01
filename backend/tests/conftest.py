@@ -24,8 +24,7 @@ def event_loop():
 @pytest.fixture
 def client() -> TestClient:
     """FastAPI テストクライアント / FastAPI test client"""
-    with TestClient(app) as test_client:
-        yield test_client
+    return TestClient(app)
 
 
 @pytest.fixture

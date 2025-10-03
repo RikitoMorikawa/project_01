@@ -24,67 +24,67 @@ class TestSecurityHeadersMiddleware:
     def test_security_headers_production(self):
         """本番環境でのセキュリティヘッダーテスト"""
         
-        with TestClient(app) as client:
-            response = client.get("/api/v1/health")
-            
-            # 基本的なセキュリティヘッダーをチェック
-            assert response.headers["X-Content-Type-Options"] == "nosniff"
-            assert response.headers["X-Frame-Options"] == "DENY"
-            assert response.headers["X-XSS-Protection"] == "1; mode=block"
-            assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
-            
-            # Permissions-Policy ヘッダーをチェック
-            permissions_policy = response.headers["Permissions-Policy"]
-            assert "geolocation=()" in permissions_policy
-            assert "microphone=()" in permissions_policy
-            assert "camera=()" in permissions_policy
-            
-            # Content-Security-Policy ヘッダーをチェック
-            csp = response.headers.get("Content-Security-Policy", "")
-            assert "default-src 'self'" in csp
-            assert "script-src 'self'" in csp
-            assert "frame-ancestors 'none'" in csp
+        client = TestClient(app)
+        response = client.get("/api/v1/health")
+        
+        # 基本的なセキュリティヘッダーをチェック
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["X-XSS-Protection"] == "1; mode=block"
+        assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        
+        # Permissions-Policy ヘッダーをチェック
+        permissions_policy = response.headers["Permissions-Policy"]
+        assert "geolocation=()" in permissions_policy
+        assert "microphone=()" in permissions_policy
+        assert "camera=()" in permissions_policy
+        
+        # Content-Security-Policy ヘッダーをチェック
+        csp = response.headers.get("Content-Security-Policy", "")
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "frame-ancestors 'none'" in csp
     
     def test_security_headers_development(self):
         """開発環境でのセキュリティヘッダーテスト"""
         
         # 開発環境用の設定でテスト
         with patch.dict("os.environ", {"ENVIRONMENT": "development"}):
-            with TestClient(app) as client:
-                response = client.get("/api/v1/health")
-                
-                # 基本的なセキュリティヘッダーは同じ
-                assert response.headers["X-Content-Type-Options"] == "nosniff"
-                assert response.headers["X-Frame-Options"] == "DENY"
-                
-                # CSP は開発環境では緩い設定
-                csp = response.headers.get("Content-Security-Policy", "")
-                assert "'unsafe-inline'" in csp
-                assert "'unsafe-eval'" in csp
+            client = TestClient(app)
+            response = client.get("/api/v1/health")
+            
+            # 基本的なセキュリティヘッダーは同じ
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+            assert response.headers["X-Frame-Options"] == "DENY"
+            
+            # CSP は開発環境では緩い設定
+            csp = response.headers.get("Content-Security-Policy", "")
+            assert "'unsafe-inline'" in csp
+            assert "'unsafe-eval'" in csp
     
     def test_hsts_header_production_only(self):
         """HSTS ヘッダーが本番環境でのみ設定されることをテスト"""
         
-        with TestClient(app) as client:
-            response = client.get("/api/v1/health")
-            
-            # 本番環境では HSTS ヘッダーが設定される
-            if app.middleware_stack:
-                # 実際の環境設定に依存
-                pass
+        client = TestClient(app)
+        response = client.get("/api/v1/health")
+        
+        # 本番環境では HSTS ヘッダーが設定される
+        if app.middleware_stack:
+            # 実際の環境設定に依存
+            pass
     
     def test_cache_control_for_auth_endpoints(self):
         """認証エンドポイントでのキャッシュ制御テスト"""
         
-        with TestClient(app) as client:
-            # 認証エンドポイントにアクセス
-            response = client.post("/api/v1/auth/login", json={
-                "email": "test@example.com",
-                "password": "testpassword"
-            })
-            
-            # キャッシュ制御ヘッダーがリダイレクト時に設定されることを確認
-            # 実際の実装に応じて調整が必要
+        client = TestClient(app)
+        # 認証エンドポイントにアクセス
+        response = client.post("/api/v1/auth/login", json={
+            "email": "test@example.com",
+            "password": "testpassword"
+        })
+        
+        # キャッシュ制御ヘッダーがリダイレクト時に設定されることを確認
+        # 実際の実装に応じて調整が必要
 
 
 class TestRateLimitMiddleware:
@@ -93,11 +93,11 @@ class TestRateLimitMiddleware:
     def test_rate_limit_normal_requests(self):
         """通常のリクエストがレート制限に引っかからないことをテスト"""
         
-        with TestClient(app) as client:
-            # 通常の範囲内でリクエストを送信
-            for i in range(5):
-                response = client.get("/api/v1/health")
-                assert response.status_code == 200
+        client = TestClient(app)
+        # 通常の範囲内でリクエストを送信
+        for i in range(5):
+            response = client.get("/api/v1/health")
+            assert response.status_code == 200
     
     def test_rate_limit_burst_protection(self):
         """バースト制限のテスト"""
@@ -196,89 +196,89 @@ class TestSecurityLoggingMiddleware:
     def test_sql_injection_detection(self, mock_logger):
         """SQL インジェクション攻撃の検出テスト"""
         
-        with TestClient(app) as client:
-            # SQL インジェクション攻撃パターンを含むリクエスト
-            response = client.get("/api/v1/users?id=1' UNION SELECT * FROM users--")
-            
-            # 警告ログが記録されることを確認
-            mock_logger.warning.assert_called()
-            warning_calls = [call for call in mock_logger.warning.call_args_list 
-                           if "SQL インジェクション攻撃の可能性" in str(call)]
-            assert len(warning_calls) > 0
+        client = TestClient(app)
+        # SQL インジェクション攻撃パターンを含むリクエスト
+        response = client.get("/api/v1/users?id=1' UNION SELECT * FROM users--")
+        
+        # 警告ログが記録されることを確認
+        mock_logger.warning.assert_called()
+        warning_calls = [call for call in mock_logger.warning.call_args_list 
+                       if "SQL インジェクション攻撃の可能性" in str(call)]
+        assert len(warning_calls) > 0
     
     @patch('app.middleware.security.logger')
     def test_xss_detection(self, mock_logger):
         """XSS 攻撃の検出テスト"""
         
-        with TestClient(app) as client:
-            # XSS 攻撃パターンを含むリクエスト
-            response = client.get("/api/v1/users?search=<script>alert('xss')</script>")
-            
-            # 警告ログが記録されることを確認
-            mock_logger.warning.assert_called()
-            warning_calls = [call for call in mock_logger.warning.call_args_list 
-                           if "XSS 攻撃の可能性" in str(call)]
-            assert len(warning_calls) > 0
+        client = TestClient(app)
+        # XSS 攻撃パターンを含むリクエスト
+        response = client.get("/api/v1/users?search=<script>alert('xss')</script>")
+        
+        # 警告ログが記録されることを確認
+        mock_logger.warning.assert_called()
+        warning_calls = [call for call in mock_logger.warning.call_args_list 
+                       if "XSS 攻撃の可能性" in str(call)]
+        assert len(warning_calls) > 0
     
     @patch('app.middleware.security.logger')
     def test_path_traversal_detection(self, mock_logger):
         """パストラバーサル攻撃の検出テスト"""
         
-        with TestClient(app) as client:
-            # パストラバーサル攻撃パターンを含むリクエスト
-            response = client.get("/api/v1/users/../../../etc/passwd")
-            
-            # 警告ログが記録されることを確認
-            mock_logger.warning.assert_called()
-            warning_calls = [call for call in mock_logger.warning.call_args_list 
-                           if "パストラバーサル攻撃の可能性" in str(call)]
-            assert len(warning_calls) > 0
+        client = TestClient(app)
+        # パストラバーサル攻撃パターンを含むリクエスト
+        response = client.get("/api/v1/users/../../../etc/passwd")
+        
+        # 警告ログが記録されることを確認
+        mock_logger.warning.assert_called()
+        warning_calls = [call for call in mock_logger.warning.call_args_list 
+                       if "パストラバーサル攻撃の可能性" in str(call)]
+        assert len(warning_calls) > 0
     
     @patch('app.middleware.security.logger')
     def test_suspicious_user_agent_detection(self, mock_logger):
         """疑わしいユーザーエージェントの検出テスト"""
         
-        with TestClient(app) as client:
-            # 疑わしいユーザーエージェントでリクエスト
-            headers = {"User-Agent": "sqlmap/1.0"}
-            response = client.get("/api/v1/health", headers=headers)
-            
-            # 警告ログが記録されることを確認
-            mock_logger.warning.assert_called()
-            warning_calls = [call for call in mock_logger.warning.call_args_list 
-                           if "疑わしいユーザーエージェント" in str(call)]
-            assert len(warning_calls) > 0
+        client = TestClient(app)
+        # 疑わしいユーザーエージェントでリクエスト
+        headers = {"User-Agent": "sqlmap/1.0"}
+        response = client.get("/api/v1/health", headers=headers)
+        
+        # 警告ログが記録されることを確認
+        mock_logger.warning.assert_called()
+        warning_calls = [call for call in mock_logger.warning.call_args_list 
+                       if "疑わしいユーザーエージェント" in str(call)]
+        assert len(warning_calls) > 0
     
     @patch('app.middleware.security.logger')
     def test_auth_endpoint_logging(self, mock_logger):
         """認証エンドポイントの詳細ログテスト"""
         
-        with TestClient(app) as client:
-            # 認証エンドポイントにアクセス
-            response = client.post("/api/v1/auth/login", json={
-                "email": "test@example.com",
-                "password": "testpassword"
-            })
-            
-            # 認証エンドポイントアクセスログが記録されることを確認
-            mock_logger.info.assert_called()
-            info_calls = [call for call in mock_logger.info.call_args_list 
-                         if "認証エンドポイントアクセス" in str(call)]
-            assert len(info_calls) > 0
+        client = TestClient(app)
+        # 認証エンドポイントにアクセス
+        response = client.post("/api/v1/auth/login", json={
+            "email": "test@example.com",
+            "password": "testpassword"
+        })
+        
+        # 認証エンドポイントアクセスログが記録されることを確認
+        mock_logger.info.assert_called()
+        info_calls = [call for call in mock_logger.info.call_args_list 
+                     if "認証エンドポイントアクセス" in str(call)]
+        assert len(info_calls) > 0
     
     @patch('app.middleware.security.logger')
     def test_error_response_logging(self, mock_logger):
         """エラーレスポンスのログテスト"""
         
-        with TestClient(app) as client:
-            # 存在しないエンドポイントにアクセス
-            response = client.get("/api/v1/nonexistent")
-            
-            # エラーレスポンスログが記録されることを確認
-            mock_logger.warning.assert_called()
-            warning_calls = [call for call in mock_logger.warning.call_args_list 
-                           if "エラーレスポンス" in str(call)]
-            assert len(warning_calls) > 0
+        client = TestClient(app)
+        # 存在しないエンドポイントにアクセス
+        response = client.get("/api/v1/nonexistent")
+        
+        # エラーレスポンスログが記録されることを確認
+        mock_logger.warning.assert_called()
+        warning_calls = [call for call in mock_logger.warning.call_args_list 
+                       if "エラーレスポンス" in str(call)]
+        assert len(warning_calls) > 0
 
 
 class TestSecurityIntegration:
@@ -287,71 +287,71 @@ class TestSecurityIntegration:
     def test_security_middleware_order(self):
         """セキュリティミドルウェアの実行順序テスト"""
         
-        with TestClient(app) as client:
-            response = client.get("/api/v1/health")
-            
-            # レスポンスが正常に処理されることを確認
-            assert response.status_code == 200
-            
-            # セキュリティヘッダーが設定されていることを確認
-            assert "X-Content-Type-Options" in response.headers
-            assert "X-Frame-Options" in response.headers
+        client = TestClient(app)
+        response = client.get("/api/v1/health")
+        
+        # レスポンスが正常に処理されることを確認
+        assert response.status_code == 200
+        
+        # セキュリティヘッダーが設定されていることを確認
+        assert "X-Content-Type-Options" in response.headers
+        assert "X-Frame-Options" in response.headers
     
     def test_security_with_cors(self):
         """CORS とセキュリティミドルウェアの連携テスト"""
         
-        with TestClient(app) as client:
-            # CORS プリフライトリクエスト
-            response = client.options(
-                "/api/v1/users",
-                headers={
-                    "Origin": "https://example.com",
-                    "Access-Control-Request-Method": "GET",
-                    "Access-Control-Request-Headers": "Authorization"
-                }
-            )
-            
-            # CORS ヘッダーとセキュリティヘッダーが両方設定されることを確認
-            assert "Access-Control-Allow-Origin" in response.headers
-            assert "X-Content-Type-Options" in response.headers
+        client = TestClient(app)
+        # CORS プリフライトリクエスト
+        response = client.options(
+            "/api/v1/users",
+            headers={
+                "Origin": "https://example.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Authorization"
+            }
+        )
+        
+        # CORS ヘッダーとセキュリティヘッダーが両方設定されることを確認
+        assert "Access-Control-Allow-Origin" in response.headers
+        assert "X-Content-Type-Options" in response.headers
     
     @patch('app.middleware.security.logger')
     def test_security_attack_simulation(self, mock_logger):
         """セキュリティ攻撃シミュレーションテスト"""
         
-        with TestClient(app) as client:
-            # 複数の攻撃パターンを組み合わせたリクエスト
-            malicious_payload = {
-                "search": "<script>alert('xss')</script>",
-                "filter": "1' OR '1'='1",
-                "path": "../../../etc/passwd"
-            }
-            
-            response = client.post("/api/v1/users", json=malicious_payload)
-            
-            # 複数の警告ログが記録されることを確認
-            assert mock_logger.warning.call_count >= 1
+        client = TestClient(app)
+        # 複数の攻撃パターンを組み合わせたリクエスト
+        malicious_payload = {
+            "search": "<script>alert('xss')</script>",
+            "filter": "1' OR '1'='1",
+            "path": "../../../etc/passwd"
+        }
+        
+        response = client.post("/api/v1/users", json=malicious_payload)
+        
+        # 複数の警告ログが記録されることを確認
+        assert mock_logger.warning.call_count >= 1
     
     def test_performance_with_security_middleware(self):
         """セキュリティミドルウェア使用時のパフォーマンステスト"""
         
-        with TestClient(app) as client:
-            start_time = time.time()
-            
-            # 複数のリクエストを送信
-            for i in range(10):
-                response = client.get("/api/v1/health")
-                assert response.status_code == 200
-            
-            end_time = time.time()
-            total_time = end_time - start_time
-            
-            # セキュリティミドルウェアによる大幅な遅延がないことを確認
-            assert total_time < 5.0  # 10リクエストで5秒以内
-            
-            # 平均レスポンス時間をチェック
-            avg_time = total_time / 10
-            assert avg_time < 0.5  # 1リクエストあたり500ms以内
+        client = TestClient(app)
+        start_time = time.time()
+        
+        # 複数のリクエストを送信
+        for i in range(10):
+            response = client.get("/api/v1/health")
+            assert response.status_code == 200
+        
+        end_time = time.time()
+        total_time = end_time - start_time
+        
+        # セキュリティミドルウェアによる大幅な遅延がないことを確認
+        assert total_time < 5.0  # 10リクエストで5秒以内
+        
+        # 平均レスポンス時間をチェック
+        avg_time = total_time / 10
+        assert avg_time < 0.5  # 1リクエストあたり500ms以内
 
 
 if __name__ == "__main__":
