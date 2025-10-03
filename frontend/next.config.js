@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Disable static export for authentication features
-  // output: "export", // Commented out to enable SSR for auth
+  // Enable static export for S3 deployment
+  output: "export",
   trailingSlash: true,
   images: {
     unoptimized: true,
