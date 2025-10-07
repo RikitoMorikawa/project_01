@@ -109,3 +109,29 @@ dev-shell-backend: ## Open shell in backend container
 
 dev-shell-mysql: ## Open MySQL shell
 	@docker exec -it csr-lambda-mysql mysql -u dev_user -p csr_lambda_dev
+
+# AWS Cognito Setup
+setup-cognito: ## Setup AWS Cognito User Pool and App Client for development
+	@./scripts/setup-cognito.sh
+
+# AWS Aurora MySQL Setup
+setup-aurora: ## Setup AWS Aurora MySQL cluster for development
+	@./scripts/setup-dev-aurora.sh
+
+sync-to-aurora: ## Sync local MySQL data to Aurora MySQL
+	@./scripts/sync-local-to-aurora.sh
+
+# Database Management
+use-local-db: ## Switch backend to use local MySQL
+	@cp backend/.env.dev backend/.env.dev.current
+	@echo "✅ Switched to local MySQL database"
+	@echo "Restart development environment: make dev-restart"
+
+use-aurora-db: ## Switch backend to use Aurora MySQL
+	@if [ -f backend/.env.dev.aurora ]; then \
+		cp backend/.env.dev.aurora backend/.env.dev; \
+		echo "✅ Switched to Aurora MySQL database"; \
+		echo "Restart development environment: make dev-restart"; \
+	else \
+		echo "❌ Aurora environment file not found. Run: make setup-aurora"; \
+	fi

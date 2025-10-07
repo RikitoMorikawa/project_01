@@ -19,8 +19,8 @@
 
 - [x] 2.2 データベース接続とモデル定義を実装
 
-  - SQLAlchemy ORM 設定と Aurora MySQL 接続を実装
-  - User と UserProfile のデータモデルを作成
+  - 生 SQL 実装による Aurora MySQL 接続を実装
+  - User と UserProfile のテーブル構造を定義
   - データベースマイグレーション機能を実装
   - _要件: 2.3, 8.3_
 

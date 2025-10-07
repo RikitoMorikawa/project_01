@@ -144,32 +144,47 @@ docker-compose -f docker-compose.test.yml down
 ```python
 # tests/integration/test_user_repository.py
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from app.database import Base
+import pymysql
+from app.database import get_database_config, create_connection
 from app.repositories.user_repository import UserRepository
-from app.models.user import User
 
 @pytest.fixture(scope="module")
 def test_db():
     """テスト用データベースのセットアップ"""
-    engine = create_engine("sqlite:///test.db")
-    Base.metadata.create_all(engine)
+    # テスト用データベース設定
+    test_config = get_database_config()
+    test_config['database'] = 'test_' + test_config['database']
 
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
+    connection = pymysql.connect(**test_config)
 
-    yield session
+    # テスト用テーブルの作成
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                cognito_user_id VARCHAR(255) UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+        connection.commit()
 
-    session.close()
-    Base.metadata.drop_all(engine)
+    yield connection
+
+    # テスト後のクリーンアップ
+    with connection.cursor() as cursor:
+        cursor.execute("DROP TABLE IF EXISTS users")
+        connection.commit()
+    connection.close()
 
 class TestUserRepository:
     """ユーザーリポジトリの統合テスト"""
 
     def test_create_and_get_user(self, test_db):
         """ユーザー作成と取得のテスト"""
-        repository = UserRepository(test_db)
+        repository = UserRepository(test_db, 'users')
 
         # ユーザー作成
         user_data = {
@@ -180,11 +195,11 @@ class TestUserRepository:
         created_user = repository.create(user_data)
 
         # ユーザー取得
-        retrieved_user = repository.get_by_id(created_user.id)
+        retrieved_user = repository.get(created_user['id'])
 
         assert retrieved_user is not None
-        assert retrieved_user.email == user_data['email']
-        assert retrieved_user.username == user_data['username']
+        assert retrieved_user['email'] == user_data['email']
+        assert retrieved_user['username'] == user_data['username']
 ```
 
 ### API 統合テスト

@@ -26,6 +26,72 @@ docker-compose up --build -d
 - **Frontend**: http://localhost:3000
 - **MySQL**: localhost:3306
 
+### 3. AWS Cognito セットアップ
+
+開発環境でも AWS Cognito を使用して認証を統一します：
+
+#### 初回セットアップ
+
+```bash
+# AWS CLI がインストールされていることを確認
+aws --version
+
+# AWS 認証情報を設定（未設定の場合）
+aws configure
+
+# Cognito User Pool と App Client を作成
+./scripts/setup-cognito.sh
+# または
+make setup-cognito
+```
+
+#### テストユーザー
+
+セットアップスクリプトが自動的に作成するテストユーザー：
+
+- **📧 test@example.com** / 🔑 Test123!@#
+
+### 4. AWS Aurora MySQL セットアップ（オプション）
+
+ローカル開発でも AWS Aurora MySQL を使用したい場合：
+
+#### Aurora クラスター作成
+
+```bash
+# Aurora MySQL クラスターを作成
+./scripts/setup-dev-aurora.sh
+# または
+make setup-aurora
+```
+
+#### ローカルデータを Aurora に同期
+
+```bash
+# ローカル MySQL のデータを Aurora に移行
+./scripts/sync-local-to-aurora.sh
+# または
+make sync-to-aurora
+```
+
+#### データベース切り替え
+
+```bash
+# ローカル MySQL を使用
+make use-local-db
+
+# Aurora MySQL を使用
+make use-aurora-db
+
+# 開発環境を再起動
+make dev-restart
+```
+
+#### 新規登録
+
+- 通常通り新規登録が可能
+- 確認コードがメールで送信されます
+- 開発環境では確認コードの送信をスキップすることも可能
+
 ## 📋 利用可能なコマンド
 
 ### 開発環境管理スクリプト

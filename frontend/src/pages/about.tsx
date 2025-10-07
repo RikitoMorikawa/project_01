@@ -28,7 +28,7 @@ export default function About() {
 
   const techStack = [
     { category: "フロントエンド", technologies: ["Next.js 14", "React 18", "TypeScript", "Tailwind CSS"] },
-    { category: "バックエンド", technologies: ["FastAPI", "Python 3.11", "Pydantic", "SQLAlchemy"] },
+    { category: "バックエンド", technologies: ["FastAPI", "Python 3.11", "Pydantic", "PyMySQL"] },
     { category: "インフラ", technologies: ["AWS Lambda", "API Gateway", "Aurora MySQL", "CloudFront"] },
     { category: "認証", technologies: ["AWS Cognito", "JWT", "OAuth 2.0", "OIDC"] },
     { category: "監視", technologies: ["CloudWatch", "X-Ray", "CloudTrail", "SNS"] },
@@ -192,12 +192,7 @@ export default function About() {
             <h2 className="text-3xl font-bold text-white mb-6">今すぐ始めてみませんか？</h2>
             <p className="text-xl text-blue-100 mb-8">CSR Lambda API Systemで、次世代のWebアプリケーション開発を体験してください。</p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => (window.location.href = "/login")}
-                className=" text-blue-600 hover:bg-gray-100 px-8 py-4"
-              >
+              <Button variant="secondary" size="lg" onClick={() => (window.location.href = "/login")} className=" text-blue-600 hover:bg-gray-100 px-8 py-4">
                 無料で始める
               </Button>
               <Button
