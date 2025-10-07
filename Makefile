@@ -118,6 +118,16 @@ setup-cognito: ## Setup AWS Cognito User Pool and App Client for development
 setup-aurora: ## Setup AWS Aurora MySQL cluster for development
 	@./scripts/setup-dev-aurora.sh
 
+# AWS CloudFront Setup
+setup-dev-cloudfront: ## Setup CloudFront distribution for development
+	@./scripts/create-dev-cloudfront.sh
+
+fix-s3-cloudfront: ## Fix S3 bucket access permissions for CloudFront
+	@./scripts/fix-s3-cloudfront-access.sh
+
+deploy-frontend-dev: ## Deploy frontend to development environment
+	@./scripts/deploy-frontend-to-dev.sh
+
 sync-to-aurora: ## Sync local MySQL data to Aurora MySQL
 	@./scripts/sync-local-to-aurora.sh
 
